@@ -1040,7 +1040,7 @@ class ScreenForm {
         private String[] aggregateGroupFields = (String[]) null
         private AggregateField[] aggregateFields = (AggregateField[]) null
         private Map<String, AggregateField> aggregateFieldMap = new HashMap<>()
-        private HashSet<String> showTotalFields = (HashSet<String>) null
+        private HashMap<String, String> showTotalFields = (HashMap<String, String>) null
         private AggregationUtil aggregationUtil = (AggregationUtil) null
 
         FormInstance(ScreenForm screenForm) {
@@ -1077,10 +1077,11 @@ class ScreenForm {
                     }
                     if (fieldNode.attribute("hide")) hasFieldHideAttrs = true
 
-                    boolean isShowTotal = "true".equals(fieldNode.attribute("show-total"))
-                    if (isShowTotal) {
-                        if (showTotalFields == null) showTotalFields = new LinkedHashSet<>()
-                        showTotalFields.add(fieldName)
+                    String showTotal = fieldNode.attribute("show-total")
+                    if ("false".equals(showTotal)) { showTotal = null } else if ("true".equals(showTotal)) { showTotal = "sum" }
+                    if (showTotal != null && !showTotal.isEmpty()) {
+                        if (showTotalFields == null) showTotalFields = new HashMap<>()
+                        showTotalFields.put(fieldName, showTotal)
                     }
 
                     String aggregate = fieldNode.attribute("aggregate")
@@ -1095,14 +1096,14 @@ class ScreenForm {
                             if (af == null) logger.error("Ignoring aggregate ${aggregate} on field ${fieldName} in form ${formNode.attribute('name')}, not a valid function, group-by, or sub-list")
                         }
 
-                        aggregateFieldMap.put(fieldName, new AggregateField(fieldName, af, isGroupBy, isSubList, isShowTotal,
+                        aggregateFieldMap.put(fieldName, new AggregateField(fieldName, af, isGroupBy, isSubList, showTotal,
                                 ecfi.resourceFacade.getGroovyClass(fieldNode.attribute("from"))))
                         if (isGroupBy) {
                             if (aggregateGroupFieldList == null) aggregateGroupFieldList = new ArrayList<>()
                             aggregateGroupFieldList.add(fieldName)
                         }
                     } else {
-                        aggregateFieldMap.put(fieldName, new AggregateField(fieldName, null, false, false, isShowTotal,
+                        aggregateFieldMap.put(fieldName, new AggregateField(fieldName, null, false, false, showTotal,
                                 ecfi.resourceFacade.getGroovyClass(fieldNode.attribute("from"))))
                     }
                 }
@@ -1126,7 +1127,7 @@ class ScreenForm {
                 AggregateField aggField = (AggregateField) aggregateFieldMap.get(fieldName)
                 if (aggField == null) {
                     MNode fieldNode = fieldNodeMap.get(fieldName)
-                    aggField = new AggregateField(fieldName, null, false, false, showTotalFields?.contains(fieldName),
+                    aggField = new AggregateField(fieldName, null, false, false, showTotalFields?.get(fieldName),
                             ecfi.resourceFacade.getGroovyClass(fieldNode.attribute("from")))
                 }
                 aggregateFields[i] = aggField
@@ -1528,16 +1529,16 @@ class ScreenForm {
             if (entityFindNode != null) {
                 EntityFindBase ef = (EntityFindBase) ecfi.entityFacade.find(entityFindNode)
 
-                // if no select-field add one for each form field displayed in a column that is a valid entity field name
-                // if (ef.getSelectFields() == null || ef.getSelectFields().size() == 0) {
+                // don't do this, use explicit select-field fields plus display/hidden fields: if (ef.getSelectFields() == null || ef.getSelectFields().size() == 0) {
                 // always do this even if there are some entity-find.select-field elements, support specifying some fields that are always selected
                 for (String fieldName in displayedFieldSet) ef.selectField(fieldName)
+                List<String> selFields = ef.getSelectFields()
                 // don't order by fields not in displayedFieldSet
                 ArrayList<String> orderByFields = ef.orderByFields
                 if (orderByFields != null) for (int i = 0; i < orderByFields.size(); ) {
                     String obfString = (String) orderByFields.get(i)
                     EntityJavaUtil.FieldOrderOptions foo = EntityJavaUtil.makeFieldOrderOptions(obfString)
-                    if (displayedFieldSet.contains(foo.fieldName)) {
+                    if (displayedFieldSet.contains(foo.fieldName) || selFields.contains(foo.fieldName)) {
                         i++
                     } else {
                         orderByFields.remove(i)
