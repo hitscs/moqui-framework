@@ -16,7 +16,7 @@
 // tasks.withType(GroovyCompile) { options.compilerArgs << "-Xlint:unchecked" }
 // tasks.withType(GroovyCompile) { options.compilerArgs << "-Xlint:deprecation" }
 
-version = '2.1.0-SNAPSHOT'
+version = '2.1.0-rc1'
 
 apply plugin: 'groovy'
 apply plugin: 'war'
@@ -35,7 +35,7 @@ buildscript {
     }
 }
 dependencyUpdates.resolutionStrategy = { componentSelection { rules -> rules.all { ComponentSelection selection ->
-    boolean rejected = ['alpha', 'beta', 'rc', 'cr', 'm'].any { qualifier -> selection.candidate.version ==~ /(?i).*[.-]${qualifier}[.\d-]*/ }
+    boolean rejected = ['alpha', 'beta', 'rc', 'cr', 'm', 'b'].any { qualifier -> selection.candidate.version ==~ /(?i).*[.-]${qualifier}[.\d-]*/ }
     if (rejected) selection.reject('Release candidate')
 } } }
 
@@ -63,12 +63,12 @@ dependencies {
     compile project(':moqui-util')
 
     // Groovy
-    compile 'org.codehaus.groovy:groovy:2.4.10' // Apache 2.0
-    compile 'org.codehaus.groovy:groovy-json:2.4.10' // Apache 2.0
-    compile 'org.codehaus.groovy:groovy-templates:2.4.10' // Apache 2.0
-    compile 'org.codehaus.groovy:groovy-xml:2.4.10' // Apache 2.0
+    compile 'org.codehaus.groovy:groovy:2.4.11' // Apache 2.0
+    compile 'org.codehaus.groovy:groovy-json:2.4.11' // Apache 2.0
+    compile 'org.codehaus.groovy:groovy-templates:2.4.11' // Apache 2.0
+    compile 'org.codehaus.groovy:groovy-xml:2.4.11' // Apache 2.0
     // jansi is needed for groovydoc only, so in providedCompile (not included in war)
-    compileOnly 'org.fusesource.jansi:jansi:1.15'
+    compileOnly 'org.fusesource.jansi:jansi:1.16'
     // Findbugs need only during compile (used by freemarker and various moqui classes)
     compileOnly 'com.google.code.findbugs:annotations:3.0.1'
 
@@ -118,7 +118,7 @@ dependencies {
     compile 'com.h2database:h2:1.4.195' // MPL 2.0, EPL 1.0
 
     // Jetty HTTP Client
-    compile 'org.eclipse.jetty:jetty-client:9.4.4.v20170414' // Apache 2.0
+    compile 'org.eclipse.jetty:jetty-client:9.4.5.v20170502' // Apache 2.0
 
     // javax.mail
     compile 'com.sun.mail:javax.mail:1.5.6' // CDDL
@@ -167,20 +167,20 @@ dependencies {
 
     // ========== test dependencies ==========
     // spock-core depends on groovy-all but we are including selected groovy modules, so don't get its dependencies
-    testCompile module('org.spockframework:spock-core:1.0-groovy-2.4') // Apache 2.0
+    testCompile module('org.spockframework:spock-core:1.1-groovy-2.4') // Apache 2.0
     testCompile 'junit:junit:4.12' // Apache 2.0
     testCompile 'org.hamcrest:hamcrest-core:1.3' // BSD 3-Clause
 
     // ========== executable war dependencies ==========
     // Jetty
-    execWarRuntime 'org.eclipse.jetty:jetty-server:9.4.4.v20170414' // Apache 2.0
-    execWarRuntime 'org.eclipse.jetty:jetty-webapp:9.4.4.v20170414' // Apache 2.0
-    execWarRuntime 'org.eclipse.jetty:jetty-jndi:9.4.4.v20170414' // Apache 2.0
-    execWarRuntime module('org.eclipse.jetty.websocket:javax-websocket-server-impl:9.4.4.v20170414') // Apache 2.0
-    execWarRuntime ('org.eclipse.jetty.websocket:javax-websocket-client-impl:9.4.4.v20170414') // Apache 2.0
-    execWarRuntime ('org.eclipse.jetty.websocket:websocket-server:9.4.4.v20170414') // Apache 2.0
+    execWarRuntime 'org.eclipse.jetty:jetty-server:9.4.5.v20170502' // Apache 2.0
+    execWarRuntime 'org.eclipse.jetty:jetty-webapp:9.4.5.v20170502' // Apache 2.0
+    execWarRuntime 'org.eclipse.jetty:jetty-jndi:9.4.5.v20170502' // Apache 2.0
+    execWarRuntime module('org.eclipse.jetty.websocket:javax-websocket-server-impl:9.4.5.v20170502') // Apache 2.0
+    execWarRuntime ('org.eclipse.jetty.websocket:javax-websocket-client-impl:9.4.5.v20170502') // Apache 2.0
+    execWarRuntime ('org.eclipse.jetty.websocket:websocket-server:9.4.5.v20170502') // Apache 2.0
     // only include this if using Endpoint and MessageHandler annotations:
-    // execWarRuntime ('org.eclipse.jetty:jetty-annotations:9.4.4.v20170414') // Apache 2.0
+    // execWarRuntime ('org.eclipse.jetty:jetty-annotations:9.4.5.v20170502') // Apache 2.0
 }
 
 // setup task dependencies to make sure the start sourceSets always get run
