@@ -33,6 +33,8 @@ import java.util.*;
 public class FieldInfo {
     protected final static Logger logger = LoggerFactory.getLogger(FieldInfo.class);
     protected final static boolean isTraceEnabled = logger.isTraceEnabled();
+    public final static String[] aggFunctionArray = {"min", "max", "sum", "avg", "count", "count-distinct"};
+    public final static Set<String> aggFunctions = new HashSet<>(Arrays.asList(aggFunctionArray));
 
     public final EntityDefinition ed;
     public final MNode fieldNode;
@@ -54,6 +56,9 @@ public class FieldInfo {
     final boolean enableLocalization;
     final boolean createOnly;
     final boolean isLastUpdatedStamp;
+    public final MNode memberEntityNode;
+    public final MNode directMemberEntityNode;
+    public final boolean hasAggregateFunction;
     final Set<String> entityAliasUsedSet = new HashSet<>();
 
     public FieldInfo(EntityDefinition ed, MNode fieldNode) {
@@ -97,7 +102,7 @@ public class FieldInfo {
         String enableAuditLogAttr = fieldNode.attribute("enable-audit-log");
         enableAuditLog = enableAuditLogAttr != null ? enableAuditLogAttr : ed.internalEntityNode.attribute("enable-audit-log");
 
-        String fcn = ed.makeFullColumnName(fieldNode);
+        String fcn = ed.makeFullColumnName(fieldNode, true);
         if (fcn == null) {
             fullColumnNameInternal = columnName;
             expandColumnName = null;
@@ -112,8 +117,13 @@ public class FieldInfo {
         }
 
         if (ed.isViewEntity) {
+            MNode tempMembEntNode = null;
             String entityAlias = fieldNode.attribute("entity-alias");
-            if (entityAlias != null && entityAlias.length() > 0) entityAliasUsedSet.add(entityAlias);
+            if (entityAlias != null && entityAlias.length() > 0) {
+                entityAliasUsedSet.add(entityAlias);
+                tempMembEntNode = ed.memberEntityAliasMap.get(entityAlias);
+            }
+            directMemberEntityNode = tempMembEntNode;
             ArrayList<MNode> cafList = fieldNode.descendants("complex-alias-field");
             int cafListSize = cafList.size();
             for (int i = 0; i < cafListSize; i++) {
@@ -121,6 +131,16 @@ public class FieldInfo {
                 String cafEntityAlias = cafNode.attribute("entity-alias");
                 if (cafEntityAlias != null && cafEntityAlias.length() > 0) entityAliasUsedSet.add(cafEntityAlias);
             }
+            if (tempMembEntNode == null && entityAliasUsedSet.size() == 1) {
+                String singleEntityAlias = entityAliasUsedSet.iterator().next();
+                tempMembEntNode = ed.memberEntityAliasMap.get(singleEntityAlias);
+            }
+            memberEntityNode = tempMembEntNode;
+            hasAggregateFunction = aggFunctions.contains(fieldNode.attribute("function"));
+        } else {
+            memberEntityNode = null;
+            directMemberEntityNode = null;
+            hasAggregateFunction = false;
         }
     }
 

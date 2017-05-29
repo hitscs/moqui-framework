@@ -725,7 +725,7 @@ class EntityFacadeImpl implements EntityFacade {
                 }
             }
             // copy master nodes (will be merged on parse)
-            // TODO: check master/detail existance before append it into entityNode
+            // TODO: check master/detail existence before append it into entityNode
             for (MNode copyNode in extendEntity.children("master")) entityNode.append(copyNode)
         }
 
@@ -1002,7 +1002,11 @@ class EntityFacadeImpl implements EntityFacade {
         ed = (EntityDefinition) entityDefinitionCache.get(entityName)
         if (ed != null) return ed
         if (entityName.isEmpty()) return null
-        return loadEntityDefinition(entityName)
+        if (entityName.startsWith("DataDocument.")) {
+            return entityDataDocument.makeEntityDefinition(entityName.substring(entityName.indexOf(".") + 1))
+        } else {
+            return loadEntityDefinition(entityName)
+        }
     }
 
     // used in tools screens
@@ -1268,15 +1272,28 @@ class EntityFacadeImpl implements EntityFacade {
         // don't check entityName empty, getEntityDefinition() does it
         EntityDefinition ed = getEntityDefinition(entityName)
         if (ed == null) throw new EntityException("No entity found with name ${entityName}")
+        if (ed.isDynamicView && entityName.startsWith("DataDocument.")) {
+            // see if it happens to be a DataDocument and if so make a special find that has its conditions too
+            // TODO: consider addition condition methods to EntityDynamicView and handling this lower level instead of here
+            return entityDataDocument.makeDataDocumentFind(entityName.substring(entityName.indexOf(".") + 1))
+        }
         return ed.makeEntityFind()
     }
     @Override
     EntityFind find(MNode node) {
         String entityName = node.attribute("entity-name")
+        if (entityName != null && entityName.contains("\${")) entityName = ecfi.resourceFacade.expand(entityName, null)
         // don't check entityName empty, getEntityDefinition() does it
         EntityDefinition ed = getEntityDefinition(entityName)
         if (ed == null) throw new EntityException("No entity found with name ${entityName}")
-        EntityFind ef = ed.makeEntityFind()
+        EntityFind ef
+        if (ed.isDynamicView && entityName.startsWith("DataDocument.")) {
+            // see if it happens to be a DataDocument and if so make a special find that has its conditions too
+            // TODO: consider addition condition methods to EntityDynamicView and handling this lower level instead of here
+            ef = entityDataDocument.makeDataDocumentFind(entityName.substring(entityName.indexOf(".") + 1))
+        } else {
+            ef = ed.makeEntityFind()
+        }
 
         String cache = node.attribute("cache")
         if (cache != null && !cache.isEmpty()) { ef.useCache("true".equals(cache)) }

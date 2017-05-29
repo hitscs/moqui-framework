@@ -313,8 +313,11 @@ public class EntityJavaUtil {
                 if (fi.createOnly) createOnlyFieldsTemp = true;
                 if ("true".equals(fi.enableAuditLog) || "update".equals(fi.enableAuditLog)) needsAuditLogTemp = true;
                 if ("true".equals(fi.fieldNode.attribute("encrypt"))) needsEncryptTemp = true;
-                String functionAttr = fi.fieldNode.attribute("function");
-                if (isView && functionAttr != null && !functionAttr.isEmpty()) hasFunctionAliasTemp = true;
+                if (isView && fi.hasAggregateFunction) {
+                    MNode memberEntity = fi.memberEntityNode;
+                    if (memberEntity == null || !"true".equals(memberEntity.attribute("sub-select")))
+                        hasFunctionAliasTemp = true;
+                }
                 String defaultStr = fi.fieldNode.attribute("default");
                 if (defaultStr != null && !defaultStr.isEmpty()) {
                     if (fi.isPk) pkFieldDefaultsTemp.put(fi.name, defaultStr);
@@ -486,12 +489,15 @@ public class EntityJavaUtil {
         public final Map<String, String> keyMap;
         public final boolean dependent;
         public final boolean mutable;
+        public final boolean isAutoReverse;
 
         RelationshipInfo(MNode relNode, EntityDefinition fromEd, EntityFacadeImpl efi) {
             this.relNode = relNode;
             this.fromEd = fromEd;
             type = relNode.attribute("type");
             isTypeOne = type.startsWith("one");
+            isAutoReverse = "true".equals(relNode.attribute("is-auto-reverse"));
+
             String titleAttr = relNode.attribute("title");
             title = titleAttr != null && !titleAttr.isEmpty() ? titleAttr : null;
             String relatedAttr = relNode.attribute("related");
