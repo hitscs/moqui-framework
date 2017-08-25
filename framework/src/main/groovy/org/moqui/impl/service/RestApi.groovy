@@ -145,7 +145,8 @@ class RestApi {
         StringBuilder fullBasePath = new StringBuilder(basePath)
         for (String rootPath in rootPathList) fullBasePath.append('/').append(rootPath)
         Map<String, Map> paths = [:]
-        Map<String, Map> definitions = new TreeMap<String, Map>()
+        // NOTE: using LinkedHashMap though TreeMap would be nice as saw odd behavior where TreeMap.put() did nothing
+        Map<String, Map> definitions = new LinkedHashMap<String, Map>()
         Map<String, Object> swaggerMap = [swagger:'2.0',
             info:[title:(resourceNode.displayName ?: "Service REST API (${fullBasePath})"),
                   version:(resourceNode.version ?: '1.0'), description:(resourceNode.description ?: '')],
@@ -638,7 +639,7 @@ class RestApi {
             aei.setTrackArtifactHit(false)
             // NOTE: consider setting parameters on aei, but don't like setting entire context, currently used for entity/service calls
             ec.artifactExecutionFacade.pushInternal(aei, !moreInPath ?
-                    (requireAuthentication == null || requireAuthentication.length() == 0 || "true".equals(requireAuthentication)) : false)
+                    (requireAuthentication == null || requireAuthentication.length() == 0 || "true".equals(requireAuthentication)) : false, true)
 
             boolean loggedInAnonymous = false
             if ("anonymous-all".equals(requireAuthentication)) {
@@ -788,7 +789,7 @@ class RestApi {
                 if (value instanceof Integer) {
                     response.setIntHeader(entry.key, (int) value)
                 } else if (value instanceof Date) {
-                    response.setDateHeader(entry.key, value.getTime())
+                    response.setDateHeader(entry.key, ((Date) value).getTime())
                 } else {
                     response.setHeader(entry.key, value.toString())
                 }

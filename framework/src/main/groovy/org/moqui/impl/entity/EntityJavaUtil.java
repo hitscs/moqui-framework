@@ -15,6 +15,7 @@ package org.moqui.impl.entity;
 
 import org.moqui.BaseException;
 import org.moqui.context.ArtifactExecutionInfo;
+import org.moqui.entity.EntityCondition;
 import org.moqui.entity.EntityDatasourceFactory;
 import org.moqui.entity.EntityException;
 import org.moqui.entity.EntityNotFoundException;
@@ -33,10 +34,7 @@ import javax.crypto.spec.PBEParameterSpec;
 import javax.xml.bind.DatatypeConverter;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 
 public class EntityJavaUtil {
     protected final static Logger logger = LoggerFactory.getLogger(EntityJavaUtil.class);
@@ -48,7 +46,7 @@ public class EntityJavaUtil {
         MNode entityFacadeNode = efi.ecfi.getConfXmlRoot().first("entity-facade");
         String pwStr = entityFacadeNode.attribute("crypt-pass");
         if (pwStr == null || pwStr.length() == 0)
-            throw new IllegalArgumentException("No entity-facade.@crypt-pass setting found, NOT doing encryption");
+            throw new EntityException("No entity-facade.@crypt-pass setting found, NOT doing encryption");
 
         String saltStr = entityFacadeNode.attribute("crypt-salt");
         byte[] salt = (saltStr != null && saltStr.length() > 0 ? saltStr : "default1").getBytes();
@@ -561,7 +559,7 @@ public class EntityJavaUtil {
     }
 
     private static Map<String, String> camelToUnderscoreMap = new HashMap<>();
-    static String camelCaseToUnderscored(String camelCase) {
+    public static String camelCaseToUnderscored(String camelCase) {
         if (camelCase == null || camelCase.length() == 0) return "";
         String usv = camelToUnderscoreMap.get(camelCase);
         if (usv != null) return usv;
@@ -666,6 +664,15 @@ public class EntityJavaUtil {
             this.evb = (EntityValueBase) evb.cloneValue();
             this.writeMode = writeMode;
             this.pkMap = evb.getPrimaryKeys();
+        }
+    }
+    public static class FindAugmentInfo {
+        public final ArrayList<EntityValueBase> valueList;
+        public final int valueListSize;
+        public final Set<Map<String, Object>> foundUpdated;
+        public final EntityCondition econd;
+        public FindAugmentInfo(ArrayList<EntityValueBase> valueList, Set<Map<String, Object>> foundUpdated, EntityCondition econd) {
+            this.valueList = valueList; valueListSize = valueList.size(); this.foundUpdated = foundUpdated; this.econd = econd;
         }
     }
 }

@@ -136,7 +136,7 @@ abstract class EntityFindBase implements EntityFind {
     EntityFind condition(String fieldName, String operator, Object value) {
         EntityCondition.ComparisonOperator opObj = operator == null || operator.isEmpty() ?
                 EntityCondition.EQUALS : EntityConditionFactoryImpl.stringComparisonOperatorMap.get(operator)
-        if (opObj == null) throw new IllegalArgumentException("Operator [${operator}] is not a valid field comparison operator")
+        if (opObj == null) throw new EntityException("Operator [${operator}] is not a valid field comparison operator")
         return condition(fieldName, opObj, value)
     }
 
@@ -672,7 +672,7 @@ abstract class EntityFindBase implements EntityFind {
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "one")
             // really worth the overhead? if so change to handle singleCondField: .setParameters(simpleAndMap)
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
 
             try {
                 return oneInternal(ec, ed)
@@ -694,7 +694,7 @@ abstract class EntityFindBase implements EntityFind {
 
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "one")
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
 
             try {
                 EntityValue ev = oneInternal(ec, ed)
@@ -710,7 +710,7 @@ abstract class EntityFindBase implements EntityFind {
     }
 
     protected EntityValue oneInternal(ExecutionContextImpl ec, EntityDefinition ed) throws EntityException, SQLException {
-        if (this.dynamicView != null) throw new IllegalArgumentException("Dynamic View not supported for 'one' find.")
+        if (this.dynamicView != null) throw new EntityException("Dynamic View not supported for 'one' find.")
 
         boolean isViewEntity = ed.isViewEntity
         EntityJavaUtil.EntityInfo entityInfo = ed.entityInfo
@@ -921,7 +921,7 @@ abstract class EntityFindBase implements EntityFind {
 
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "list")
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
             try {
                 return listInternal(ec, ed)
             } finally {
@@ -941,7 +941,7 @@ abstract class EntityFindBase implements EntityFind {
 
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "list")
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
             try {
                 EntityList el = listInternal(ec, ed)
                 return el.getMasterValueList(name)
@@ -1092,7 +1092,7 @@ abstract class EntityFindBase implements EntityFind {
 
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "iterator")
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
             try {
                 return iteratorInternal(ec, ed)
             } finally {
@@ -1214,7 +1214,7 @@ abstract class EntityFindBase implements EntityFind {
 
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "count")
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
             try {
                 return countInternal(ec, ed)
             } finally {

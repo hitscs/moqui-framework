@@ -15,6 +15,7 @@ package org.moqui.impl.entity
 
 import groovy.transform.CompileStatic
 import org.codehaus.groovy.runtime.typehandling.GroovyCastException
+import org.moqui.BaseArtifactException
 import org.moqui.BaseException
 import org.moqui.context.ArtifactExecutionInfo
 import org.moqui.etl.SimpleEtl
@@ -107,7 +108,8 @@ class EntityFacadeImpl implements EntityFacade {
                 theTimeZone = TimeZone.getTimeZone((String) entityFacadeNode.attribute("database-time-zone"))
             } catch (Exception e) { logger.warn("Error parsing database-time-zone: ${e.toString()}") }
         }
-        databaseTimeZone = theTimeZone ?: TimeZone.getDefault()
+        databaseTimeZone = theTimeZone != null ? theTimeZone : TimeZone.getDefault()
+        logger.info("Database time zone is ${databaseTimeZone}")
         Locale theLocale = null
         if (entityFacadeNode.attribute("database-locale")) {
             try {
@@ -490,36 +492,21 @@ class EntityFacadeImpl implements EntityFacade {
                     continue
                 }
 
+                List<String> locList = (List<String>) entityLocationCache.get(entityName)
+                if (locList == null) {
+                    locList = new LinkedList<>()
+                    locList.add(entityRr.location)
+                    entityLocationCache.put(entityName, locList)
+                } else if (!locList.contains(entityRr.location)) {
+                    locList.add(entityRr.location)
+                }
+
                 if (packageName != null && packageName.length() > 0) {
                     String fullEntityName = packageName.concat(".").concat(entityName)
-                    List<String> pkgList = (List<String>) entityLocationCache.get(fullEntityName)
-                    if (pkgList == null) {
-                        pkgList = new LinkedList<>()
-                        pkgList.add(entityRr.location)
-                        entityLocationCache.put(fullEntityName, pkgList)
-                    } else if (!pkgList.contains(entityRr.location)) {
-                        pkgList.add(entityRr.location)
-                    }
+                    if (!entityLocationCache.containsKey(fullEntityName)) entityLocationCache.put(fullEntityName, locList)
                 }
-
                 if (shortAlias != null && shortAlias.length() > 0) {
-                    List<String> aliasList = (List<String>) entityLocationCache.get(shortAlias)
-                    if (aliasList == null) {
-                        aliasList = new LinkedList<>()
-                        aliasList.add(entityRr.location)
-                        entityLocationCache.put(shortAlias, aliasList)
-                    } else if (!aliasList.contains(entityRr.location)) {
-                        aliasList.add(entityRr.location)
-                    }
-                }
-
-                List<String> nameList = (List<String>) entityLocationCache.get(entityName)
-                if (nameList == null) {
-                    nameList = new LinkedList<>()
-                    nameList.add(entityRr.location)
-                    entityLocationCache.put(entityName, nameList)
-                } else if (!nameList.contains(entityRr.location)) {
-                    nameList.add(entityRr.location)
+                    if (!entityLocationCache.containsKey(shortAlias)) entityLocationCache.put(shortAlias, locList)
                 }
 
                 numEntities++
@@ -1371,7 +1358,7 @@ class EntityFacadeImpl implements EntityFacade {
             ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(ed.getFullEntityName(),
                     ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "one")
             // really worth the overhead? if so change to handle singleCondField: .setParameters(simpleAndMap)
-            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView)
+            aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false)
 
             try {
                 boolean doCache = useCache != null ? (useCache.booleanValue() ? !entityInfo.neverCache : false) : "true".equals(entityInfo.useCache)
@@ -1635,44 +1622,70 @@ class EntityFacadeImpl implements EntityFacade {
         if (ed == null) throw new EntityNotFoundException("Not entity found with name ${entityName}")
 
         EntityList valueList = new EntityListImpl(this)
-        addValuesFromPlainMapRecursive(ed, value, valueList)
+        addValuesFromPlainMapRecursive(ed, value, valueList, null)
         return valueList
     }
-    void addValuesFromPlainMapRecursive(EntityDefinition ed, Map value, EntityList valueList) {
+    void addValuesFromPlainMapRecursive(EntityDefinition ed, Map value, EntityList valueList, Map<String, Object> parentPks) {
+        // add in all of the main entity's primary key fields, this is necessary for auto-generated, and to
+        //     allow them to be left out of related records
+        if (parentPks != null) {
+            for (Map.Entry<String, Object> entry in parentPks.entrySet())
+                if (!value.containsKey(entry.key)) value.put(entry.key, entry.value)
+        }
+
         EntityValue newEntityValue = makeValue(ed.getFullEntityName())
         newEntityValue.setFields(value, true, null, null)
         valueList.add(newEntityValue)
 
-        Map pkMap = newEntityValue.getPrimaryKeys()
+        Map<String, Object> sharedPkMap = newEntityValue.getPrimaryKeys()
+        if (parentPks != null) {
+            for (Map.Entry<String, Object> entry in parentPks.entrySet())
+                if (!sharedPkMap.containsKey(entry.key)) sharedPkMap.put(entry.key, entry.value)
+        }
 
-        // check parameters Map for relationships
-        for (RelationshipInfo relInfo in ed.getRelationshipsInfo(false)) {
-            Object relParmObj = value.get(relInfo.shortAlias)
-            String relKey = null
-            if (relParmObj != null && !ObjectUtilities.isEmpty(relParmObj)) {
-                relKey = relInfo.shortAlias
-            } else {
-                relParmObj = value.get(relInfo.relationshipName)
-                if (relParmObj) relKey = relInfo.relationshipName
+        // check parameters Map for relationships and other entities
+        Map nonFieldEntries = ed.entityInfo.cloneMapRemoveFields(value, null)
+        for (Map.Entry entry in nonFieldEntries.entrySet()) {
+            Object relParmObj = entry.getValue()
+            if (relParmObj == null) continue
+            // if the entry is not a Map or List ignore it, we're only looking for those
+            if (!(relParmObj instanceof Map) && !(relParmObj instanceof List)) continue
+
+            String entryName = (String) entry.getKey()
+            if (parentPks != null && parentPks.containsKey(entryName)) continue
+            if (EntityAutoServiceRunner.otherFieldsToSkip.contains(entryName)) continue
+
+            EntityDefinition subEd = null
+            Map<String, Object> pkMap = null
+            RelationshipInfo relInfo = ed.getRelationshipInfo(entryName)
+            if (relInfo != null) {
+                if (!relInfo.mutable) continue
+                subEd = relInfo.relatedEd
+                // this is a relationship so add mapped key fields to the parentPks if any field names are different
+                pkMap = new HashMap<>(sharedPkMap)
+                pkMap.putAll(relInfo.getTargetParameterMap(sharedPkMap))
+            } else if (isEntityDefined(entryName)) {
+                subEd = getEntityDefinition(entryName)
+                pkMap = sharedPkMap
             }
-            if (relParmObj != null && !ObjectUtilities.isEmpty(relParmObj)) {
-                if (relParmObj instanceof Map) {
-                    // add in all of the main entity's primary key fields, this is necessary for auto-generated, and to
-                    //     allow them to be left out of related records
-                    Map relParmMap = (Map) relParmObj
-                    relParmMap.putAll(pkMap)
-                    addValuesFromPlainMapRecursive(relInfo.relatedEd, relParmMap, valueList)
-                } else if (relParmObj instanceof List) {
-                    for (Object relParmEntry in relParmObj) {
-                        if (relParmEntry instanceof Map) {
-                            Map relParmEntryMap = (Map) relParmEntry
-                            relParmEntryMap.putAll(pkMap)
-                            addValuesFromPlainMapRecursive(relInfo.relatedEd, relParmEntryMap, valueList)
-                        } else {
-                            logger.warn("In entity auto create for entity ${ed.getFullEntityName()} found list for relationship ${relKey} with a non-Map entry: ${relParmEntry}")
-                        }
+            if (subEd == null) continue
 
+            boolean isEntityValue = relParmObj instanceof EntityValue
+            if (relParmObj instanceof Map && !isEntityValue) {
+                addValuesFromPlainMapRecursive(subEd, (Map) relParmObj, valueList, pkMap)
+            } else if (relParmObj instanceof List) {
+                for (Object relParmEntry in relParmObj) {
+                    if (relParmEntry instanceof Map) {
+                        addValuesFromPlainMapRecursive(subEd, (Map) relParmEntry, valueList, pkMap)
+                    } else {
+                        logger.warn("In entity values from plain map for entity ${ed.getFullEntityName()} found list for sub-object ${entryName} with a non-Map entry: ${relParmEntry}")
                     }
+                }
+            } else {
+                if (isEntityValue) {
+                    if (logger.isTraceEnabled()) logger.trace("In entity values from plain map for entity ${ed.getFullEntityName()} found sub-object ${entryName} which is not a Map or List: ${relParmObj}")
+                } else {
+                    logger.warn("In entity values from plain map for entity ${ed.getFullEntityName()} found sub-object ${entryName} which is not a Map or List: ${relParmObj}")
                 }
             }
         }
@@ -1682,7 +1695,7 @@ class EntityFacadeImpl implements EntityFacade {
     @Override
     EntityListIterator sqlFind(String sql, List<Object> sqlParameterList, String entityName, List<String> fieldList) {
         if (sqlParameterList == null || fieldList == null || sqlParameterList.size() != fieldList.size())
-            throw new IllegalArgumentException("For sqlFind sqlParameterList and fieldList must not be null and must be the same size")
+            throw new BaseArtifactException("For sqlFind sqlParameterList and fieldList must not be null and must be the same size")
         EntityDefinition ed = this.getEntityDefinition(entityName)
         this.entityDbMeta.checkTableRuntime(ed)
 
@@ -1693,7 +1706,7 @@ class EntityFacadeImpl implements EntityFacade {
             int fiArrayIndex = 0
             for (String fieldName in fieldList) {
                 FieldInfo fi = ed.getFieldInfo(fieldName)
-                if (fi == null) throw new IllegalArgumentException("Field ${fieldName} not found for entity ${entityName}")
+                if (fi == null) throw new BaseArtifactException("Field ${fieldName} not found for entity ${entityName}")
                 fiArray[fiArrayIndex] = fi
                 fiArrayIndex++
             }
@@ -1912,7 +1925,7 @@ class EntityFacadeImpl implements EntityFacade {
                 return
             }
             EntityDefinition ed = efi.getEntityDefinition(entityName)
-            if (ed == null) throw new BaseException("Could not find entity ${entityName}")
+            if (ed == null) throw new BaseArtifactException("Could not find entity ${entityName}")
             // NOTE: the following uses the same pattern as EntityDataLoaderImpl.LoadValueHandler
             if (dummyFks || useTryInsert) {
                 EntityValue curValue = ed.makeEntityValue()

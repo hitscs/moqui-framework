@@ -436,7 +436,7 @@ public abstract class EntityValueBase implements EntityValue {
         try {
             if (o instanceof byte[]) return new SerialBlob((byte[]) o);
         } catch (Exception e) {
-            throw new EntityException("Error getting SerialBloc for field " + name + " in entity " + entityName, e);
+            throw new EntityException("Error getting SerialBlob for field " + name + " in entity " + entityName, e);
         }
         // try groovy...
         return DefaultGroovyMethods.asType(o, SerialBlob.class);
@@ -584,7 +584,8 @@ public abstract class EntityValueBase implements EntityValue {
         FieldInfo[] fieldInfoList = ed.entityInfo.allFieldInfoArray;
         for (int i = 0; i < fieldInfoList.length; i++) {
             FieldInfo fieldInfo = fieldInfoList[i];
-            if ("true".equals(fieldInfo.enableAuditLog) || (isUpdate && "update".equals(fieldInfo.enableAuditLog))) {
+            boolean isLogUpdate = "update".equals(fieldInfo.enableAuditLog);
+            if ((!isLogUpdate && "true".equals(fieldInfo.enableAuditLog)) || (isUpdate && isLogUpdate)) {
                 String fieldName = fieldInfo.name;
 
                 // is there a new value? if not continue
@@ -592,6 +593,8 @@ public abstract class EntityValueBase implements EntityValue {
 
                 Object value = get(fieldName);
                 Object oldValue = oldValues != null ? oldValues.get(fieldName) : null;
+                // if set to log updates and old value is null don't consider it an update (is initial set of value)
+                if (isLogUpdate && oldValue == null) continue;
                 if (isUpdate) {
                     // if isUpdate but old value == new value, then it hasn't been updated, so skip it
                     if (value == null) { if (oldValue == null) continue; }
@@ -1207,7 +1210,7 @@ public abstract class EntityValueBase implements EntityValue {
 
         // do the artifact push/authz
         ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(entityName, ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_CREATE, "create").setParameters(valueMapInternal);
-        aefi.pushInternal(aei, !entityInfo.authorizeSkipCreate);
+        aefi.pushInternal(aei, !entityInfo.authorizeSkipCreate, false);
 
         try {
             // run EECA before rules
@@ -1300,7 +1303,7 @@ public abstract class EntityValueBase implements EntityValue {
 
         // do the artifact push/authz
         ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(entityName, ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_UPDATE, "update").setParameters(valueMapInternal);
-        aefi.pushInternal(aei, !entityInfo.authorizeSkipTrue);
+        aefi.pushInternal(aei, !entityInfo.authorizeSkipTrue, false);
 
         try {
             // run EECA before rules
@@ -1332,8 +1335,8 @@ public abstract class EntityValueBase implements EntityValue {
             }
 
             // if (ed.getEntityName() == "foo") logger.warn("================ evb.update() ${getEntityName()} nonPkFieldList=${nonPkFieldList};\nvalueMap=${valueMap};\noldValues=${oldValues}")
-            if (nonPkFieldArrayIndex == 0) {
-                if (logger.isTraceEnabled()) logger.trace("Not doing update on entity with no populated non-PK fields; entity=" + this.toString());
+            if (nonPkFieldArrayIndex == 0 || (nonPkFieldArrayIndex == 1 && modifiedLastUpdatedStamp)) {
+                if (logger.isTraceEnabled()) logger.trace("Not doing update on entity with no changed non-PK fields; value=" + this.toString());
                 return this;
             }
 
@@ -1433,7 +1436,7 @@ public abstract class EntityValueBase implements EntityValue {
 
         // do the artifact push/authz
         ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(entityName, ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_DELETE, "delete").setParameters(valueMapInternal);
-        aefi.pushInternal(aei, !entityInfo.authorizeSkipTrue);
+        aefi.pushInternal(aei, !entityInfo.authorizeSkipTrue, false);
 
         try {
             // run EECA before rules
@@ -1468,6 +1471,7 @@ public abstract class EntityValueBase implements EntityValue {
     @Override
     public boolean refresh() {
         final EntityDefinition ed = getEntityDefinition();
+        final EntityJavaUtil.EntityInfo entityInfo = ed.entityInfo;
         final EntityFacadeImpl efi = getEntityFacadeImpl();
         final ExecutionContextFactoryImpl ecfi = efi.ecfi;
         final ExecutionContextImpl ec = ecfi.getEci();
@@ -1480,9 +1484,12 @@ public abstract class EntityValueBase implements EntityValue {
             return false;
         }
 
+        // check/set defaults
+        if (entityInfo.hasFieldDefaults) checkSetFieldDefaults(ed, ec, null);
+
         // do the artifact push/authz
         ArtifactExecutionInfoImpl aei = new ArtifactExecutionInfoImpl(entityName, ArtifactExecutionInfo.AT_ENTITY, ArtifactExecutionInfo.AUTHZA_VIEW, "refresh").setParameters(valueMapInternal);
-        aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView);
+        aefi.pushInternal(aei, !ed.entityInfo.authorizeSkipView, false);
 
         boolean retVal = false;
         try {
@@ -1529,12 +1536,12 @@ public abstract class EntityValueBase implements EntityValue {
             return fi.name.hashCode() + (val != null ? val.hashCode() : 0);
         }
         @Override public boolean equals(Object obj) {
-            if (obj instanceof EntityFieldEntry) {
-                EntityFieldEntry other = (EntityFieldEntry) obj;
-                return fi.name.equals(other.fi.name) && getValue().equals(other.getValue());
-            } else {
-                return false;
-            }
+            if (!(obj instanceof EntityFieldEntry)) return false;
+            EntityFieldEntry other = (EntityFieldEntry) obj;
+            if (!fi.name.equals(other.fi.name)) return false;
+            Object thisVal = getValue();
+            Object otherVal = other.getValue();
+            return thisVal == null ? otherVal == null : thisVal.equals(otherVal);
         }
     }
 
