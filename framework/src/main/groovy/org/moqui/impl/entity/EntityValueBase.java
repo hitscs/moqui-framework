@@ -137,6 +137,7 @@ public abstract class EntityValueBase implements EntityValue {
     public boolean getIsFromDb() { return isFromDb; }
 
     @Override public String getEntityName() { return entityName; }
+    @Override public String getEntityNamePretty() { return StringUtilities.camelCaseToPretty(getEntityDefinition().getEntityName()); }
     @Override public boolean isModified() { return modified; }
     @Override public boolean isFieldModified(String name) {
         Object valueMapValue = valueMapInternal.getOrDefault(name, PLACEHOLDER);
@@ -597,12 +598,21 @@ public abstract class EntityValueBase implements EntityValue {
                 if (isLogUpdate && oldValue == null) continue;
                 if (isUpdate) {
                     // if isUpdate but old value == new value, then it hasn't been updated, so skip it
-                    if (value == null) { if (oldValue == null) continue; }
-                    else { if (value.equals(oldValue)) continue; }
+                    if (value == null) {
+                        if (oldValue == null) continue;
+                    } else {
+                        if (value instanceof BigDecimal && oldValue instanceof BigDecimal) {
+                            // better handling for BigDecimal, perhaps others
+                            if (((BigDecimal) value).compareTo((BigDecimal) oldValue) == 0) continue;
+                        } else {
+                            if (value.equals(oldValue)) continue;
+                        }
+                    }
                 } else {
                     // if it's a create and there is no value don't log a change
                     if (value == null) continue;
                 }
+                // logger.warn("EntityAuditLog field " + fieldName + " old " + oldValue + " (" + (oldValue != null ? oldValue.getClass().getName() : "null") + ") new " + value + " (" + (value != null ? value.getClass().getName() : "null") + ")");
 
                 // don't skip for this, if a field was reset then we want to record that: if (!value) continue
 
@@ -625,7 +635,7 @@ public abstract class EntityValueBase implements EntityValue {
                 parms.put("changedByUserId", ec.getUser().getUserId());
                 parms.put("changedInVisitId", ec.getUser().getVisitId());
                 parms.put("artifactStack", stackNameString);
-                parms.put("oldValueText", oldValue);
+                if (oldValue != null) parms.put("oldValueText", ObjectUtilities.toPlainString(oldValue));
                 parms.putAll(pksValueMap);
 
                 // logger.warn("TOREMOVE: in handleAuditLog for [${ed.entityName}.${fieldName}] value=[${value}], oldValue=[${oldValue}], oldValues=[${oldValues}]", new Exception("AuditLog location"))
@@ -662,10 +672,14 @@ public abstract class EntityValueBase implements EntityValue {
                                   Boolean useCache, Boolean forUpdate) {
         EntityJavaUtil.RelationshipInfo relInfo = getEntityDefinition().getRelationshipInfo(relationshipName);
         if (relInfo == null) throw new EntityException("Relationship " + relationshipName + " not found in entity " + entityName);
+        return findRelated(relInfo, byAndFields, orderBy, useCache, forUpdate);
+    }
 
+    private EntityList findRelated(final EntityJavaUtil.RelationshipInfo relInfo, Map<String, Object> byAndFields,
+                                   List<String> orderBy, Boolean useCache, Boolean forUpdate) {
         String relatedEntityName = relInfo.relatedEntityName;
         Map<String, String> keyMap = relInfo.keyMap;
-        if (keyMap == null || keyMap.size() == 0) throw new EntityException("Relationship " + relationshipName + " in entity " + entityName + " has no key-map sub-elements and no default values");
+        if (keyMap == null || keyMap.size() == 0) throw new EntityException("Relationship " + relInfo.relationshipName + " in entity " + entityName + " has no key-map sub-elements and no default values");
 
         // make a Map where the key is the related entity's field name, and the value is the value from this entity
         Map<String, Object> condMap = new HashMap<>();
@@ -717,6 +731,22 @@ public abstract class EntityValueBase implements EntityValue {
     }
 
     @Override
+    public EntityList findRelatedFk(Set<String> skipEntities) {
+        EntityList relatedList = new EntityListImpl(getEntityFacadeImpl());
+        ArrayList<EntityJavaUtil.RelationshipInfo> relInfoList = getEntityDefinition().getRelationshipsInfo(false);
+        int relInfoListSize = relInfoList.size();
+        for (int i = 0; i < relInfoListSize; i++) {
+            EntityJavaUtil.RelationshipInfo relInfo = relInfoList.get(i);
+            EntityJavaUtil.RelationshipInfo reverseInfo = relInfo.findReverse();
+            if (reverseInfo == null || !reverseInfo.isTypeOne || (skipEntities != null && (skipEntities.contains(reverseInfo.fromEd.fullEntityName) ||
+                    skipEntities.contains(reverseInfo.fromEd.getShortAlias()) || skipEntities.contains(reverseInfo.fromEd.getEntityName())))) continue;
+            EntityList curList = findRelated(relInfo, null, null, null, null);
+            relatedList.addAll(curList);
+        }
+        return relatedList;
+    }
+
+    @Override
     public void deleteRelated(String relationshipName) {
         // NOTE: this does a select for update, may consider not doing that by default
         EntityList relatedList = findRelated(relationshipName, null, null, false, true);
@@ -745,14 +775,48 @@ public abstract class EntityValueBase implements EntityValue {
         if (foundNonDeleteRelated) return false;
 
         // delete related records to delete
-        for (String delRelName : relationshipsToDelete) {
-            deleteRelated(delRelName);
-        }
-
+        for (String delRelName : relationshipsToDelete) deleteRelated(delRelName);
         // delete this record
         delete();
-
+        // done, successful delete
         return true;
+    }
+
+    @Override
+    public void deleteWithCascade(Set<String> clearRefEntities, Set<String> validateAllowDeleteEntities) {
+        ArrayList<EntityJavaUtil.RelationshipInfo> relInfoList = getEntityDefinition().getRelationshipsInfo(false);
+        int relInfoListSize = relInfoList.size();
+        for (int i = 0; i < relInfoListSize; i++) {
+            // find relationships with a type one reverse (relationships for records that depend on this)
+            EntityJavaUtil.RelationshipInfo relInfo = relInfoList.get(i);
+            EntityJavaUtil.RelationshipInfo reverseInfo = relInfo.findReverse();
+            if (reverseInfo == null || !reverseInfo.isTypeOne) continue;
+            // see if we should clear ref fields or delete
+            EntityDefinition relEd = relInfo.relatedEd;
+            boolean clearRef = clearRefEntities != null && (clearRefEntities.contains(relEd.fullEntityName) ||
+                    clearRefEntities.contains(relEd.getShortAlias()) || clearRefEntities.contains(relEd.getEntityName()));
+            // find records
+            EntityList relList = findRelated(relInfo, null, null, null, null);
+            int relListSize = relList.size();
+            for (int j = 0; j < relListSize; j++) {
+                EntityValue relVal = relList.get(j);
+                if (clearRef) {
+                    for (String fieldName : reverseInfo.keyMap.keySet()) {
+                        if (relEd.isPkField(fieldName)) throw new EntityException("In deleteWithCascade on entity " + getEntityName() + " related entity " + relEd.fullEntityName + " is in the clear ref set but field " + fieldName + " is a primary key field and cannot be cleared");
+                        relVal.set(fieldName, null);
+                    }
+                    relVal.update();
+                } else {
+                    // if we should validate entities we are attempting to delete do that now
+                    if (validateAllowDeleteEntities != null && !validateAllowDeleteEntities.contains(relEd.fullEntityName))
+                        throw new EntityException("Cannot delete " + getEntityNamePretty() + " " + getPrimaryKeys() + ", found " + relVal.getEntityNamePretty() + " " + relVal.getPrimaryKeys() + " that depends on it");
+                    // delete with cascade
+                    relVal.deleteWithCascade(clearRefEntities, validateAllowDeleteEntities);
+                }
+            }
+        }
+        // delete this record
+        delete();
     }
 
     @Override
