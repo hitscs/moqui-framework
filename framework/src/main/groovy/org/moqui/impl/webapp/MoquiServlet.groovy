@@ -56,8 +56,9 @@ class MoquiServlet extends HttpServlet {
             return
         }
 
-        if ("Upgrade".equals(request.getHeader("Connection")) || "websocket".equals(request.getHeader("Upgrade"))) {
-            logger.warn("Got request for Connection:Upgrade or Upgrade:websocket which should have been handled by servlet container, returning error")
+        // "Connection:Upgrade or " "Upgrade".equals(request.getHeader("Connection")) ||
+        if ("websocket".equals(request.getHeader("Upgrade"))) {
+            logger.warn("Got request for Upgrade:websocket which should have been handled by servlet container, returning error")
             response.sendError(HttpServletResponse.SC_NOT_IMPLEMENTED)
             return
         }
@@ -67,15 +68,16 @@ class MoquiServlet extends HttpServlet {
         String pathInfo = request.getPathInfo()
 
         if (logger.traceEnabled) logger.trace("Start request to [${pathInfo}] at time [${startTime}] in session [${request.session.id}] thread [${Thread.currentThread().id}:${Thread.currentThread().name}]")
+        // logger.warn("Start request to [${pathInfo}] at time [${startTime}] in session [${request.session.id}] thread [${Thread.currentThread().id}:${Thread.currentThread().name}]", new Exception("Start request"))
 
         if (MDC.get("moqui_userId") != null) logger.warn("In MoquiServlet.service there is already a userId in thread (${Thread.currentThread().id}:${Thread.currentThread().name}), removing")
         MDC.remove("moqui_userId")
         MDC.remove("moqui_visitorId")
 
         ExecutionContextImpl activeEc = ecfi.activeContext.get()
-        if (activeEc != null && activeEc.forThreadId != Thread.currentThread().id) {
-            logger.warn("In MoquiServlet.service there is already an ExecutionContext (from ${activeEc.forThreadId}:${activeEc.forThreadName}) in this thread (${Thread.currentThread().id}:${Thread.currentThread().name}), destroying")
-            ecfi.destroyActiveExecutionContext()
+        if (activeEc != null) {
+            logger.warn("In MoquiServlet.service there is already an ExecutionContext for user ${activeEc.user.username} (from ${activeEc.forThreadId}:${activeEc.forThreadName}) in this thread (${Thread.currentThread().id}:${Thread.currentThread().name}), destroying")
+            activeEc.destroy()
         }
         ExecutionContextImpl ec = ecfi.getEci()
 

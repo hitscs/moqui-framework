@@ -89,6 +89,9 @@ public class EntityFindBuilder extends EntityQueryBuilder {
         } else {
             // recurse to find member-entity with joinFromAlias, add in its joinFromAlias until one is found that is already in the set
             expandJoinFromAlias(entityNode, joinFromAlias, entityAliasUsedSet, entityAliasesJoinedInSet);
+            // if no exception from an alias not found or not joined in then we found a join path back so add in the current search alias
+            entityAliasesJoinedInSet.add(searchEntityAlias);
+            entityAliasUsedSet.add(searchEntityAlias);
         }
     }
 
@@ -518,7 +521,7 @@ public class EntityFindBuilder extends EntityQueryBuilder {
             String colName = localEntityDefinition.getColumnName(joinField);
             localBuilder.append(colName).append(" AS ").append(asName);
             if (gbClause.length() > 0) gbClause.append(", ");
-            gbClause.append(asName);
+            gbClause.append(colName);
         }
 
         // where condition to use for FROM clause (field filtering) and for sub-select WHERE clause
@@ -565,7 +568,13 @@ public class EntityFindBuilder extends EntityQueryBuilder {
             for (int j = 0; j < fieldInfoArray.length; j++) {
                 FieldInfo fi = fieldInfoArray[j];
                 if (fi == null) continue;
-                if (!fi.hasAggregateFunction) {
+                boolean doGroupBy = !fi.hasAggregateFunction;
+                if (!doGroupBy && fi.memberEntityNode != null && "true".equals(fi.memberEntityNode.attribute("sub-select"))) {
+                    // TODO we have a sub-select, if it is on a non-view entity we want to group by (on a view-entity would be only if no aggregate in wrapping alias)
+                    EntityDefinition fromEntityDefinition = efi.getEntityDefinition(fi.memberEntityNode.attribute("entity-name"));
+                    if (!fromEntityDefinition.isViewEntity) doGroupBy = true;
+                }
+                if (doGroupBy) {
                     if (gbClause.length() > 0) gbClause.append(", ");
                     gbClause.append(fi.getFullColumnName());
                 }

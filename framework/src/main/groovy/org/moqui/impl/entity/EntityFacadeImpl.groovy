@@ -908,7 +908,8 @@ class EntityFacadeImpl implements EntityFacade {
         for (String entityName in getAllEntityNamesInGroup(groupName)) edf.checkAndAddTable(entityName)
     }
 
-    Set<String> getAllEntityNames() {
+    Set<String> getAllEntityNames() { return getAllEntityNames(null) }
+    Set<String> getAllEntityNames(String filterRegexp) {
         Map<String, List<String>> entityLocationCache = entityLocationSingleCache.get(entityLocSingleEntryName)
         if (entityLocationCache == null) entityLocationCache = loadAllEntityLocations()
 
@@ -918,7 +919,11 @@ class EntityFacadeImpl implements EntityFacade {
         for (Map.Entry<String, List<String>> entry in entityLocationCache.entrySet()) {
             String en = entry.key
             List<String> locList = entry.value
-            if (en.contains(".") && locList != null && locList.size() > 0) allNames.add(en)
+            if (en.contains(".") && locList != null && locList.size() > 0) {
+                // Added (?i) to ignore the case and '*' in the starting and at ending to match if searched string is sub-part of entity name
+                if (filterRegexp != null && !en.matches("(?i).*" + filterRegexp + ".*")) continue
+                allNames.add(en)
+            }
         }
         return allNames
     }
@@ -1013,9 +1018,7 @@ class EntityFacadeImpl implements EntityFacade {
         if (masterEntitiesOnly) createAllAutoReverseManyRelationships()
 
         ArrayList<Map<String, Object>> eil = new ArrayList<>()
-        for (String en in getAllEntityNames()) {
-            // Added (?i) to ignore the case and '*' in the starting and at ending to match if searched string is sub-part of entity name
-            if (filterRegexp && !en.matches("(?i).*" + filterRegexp + ".*")) continue
+        for (String en in getAllEntityNames(filterRegexp)) {
             EntityDefinition ed = null
             try { ed = getEntityDefinition(en) } catch (EntityException e) { logger.warn("Problem finding entity definition", e) }
             if (ed == null) continue
@@ -1236,7 +1239,7 @@ class EntityFacadeImpl implements EntityFacade {
             if (edf instanceof EntityDatasourceFactoryImpl) {
                 EntityDatasourceFactoryImpl edfi = (EntityDatasourceFactoryImpl) edf
                 DatasourceInfo dsi = edfi.dsi
-                dsiList.add([group:groupName, uniqueName:dsi.uniqueName, database:dsi.database.attribute('name'), detail:dsi.dsDetails])
+                dsiList.add([group:groupName, uniqueName:dsi.uniqueName, database:dsi.database.attribute('name'), detail:dsi.dsDetails] as Map<String, Object>)
             } else {
                 dsiList.add([group:groupName] as Map<String, Object>)
             }
@@ -1306,26 +1309,12 @@ class EntityFacadeImpl implements EntityFacade {
         }
 
         // logger.warn("=== shouldCache ${this.entityName} ${shouldCache()}, limit=${this.limit}, offset=${this.offset}, useCache=${this.useCache}, getEntityDef().getUseCache()=${this.getEntityDef().getUseCache()}")
-        if (!ef.shouldCache()) {
-            for (MNode df in node.children("date-filter"))
-                ef.condition(getConditionFactoryImpl().makeConditionDate(df.attribute("from-field-name") ?: "fromDate",
-                        df.attribute("thru-field-name") ?: "thruDate",
-                        (df.attribute("valid-date") ? ecfi.resourceFacade.expression(df.attribute("valid-date"), null) as Timestamp : null),
-                        'true'.equals(df.attribute("ignore-if-empty")), df.attribute("ignore") ?: 'false'))
-        }
-
-        for (MNode ecn in node.children("econdition")) {
-            EntityCondition econd = getConditionFactoryImpl().makeActionCondition(ecn)
-            if (econd != null) ef.condition(econd)
-        }
-        for (MNode ecs in node.children("econditions"))
-            ef.condition(getConditionFactoryImpl().makeActionConditions(ecs))
-        for (MNode eco in node.children("econdition-object"))
-            ef.condition((EntityCondition) ecfi.resourceFacade.expression(eco.attribute("field"), null))
+        EntityCondition mainCond = getConditionFactoryImpl().makeActionConditions(node, ef.shouldCache())
+        if (mainCond != null) ef.condition(mainCond)
 
         if (node.hasChild("having-econditions")) {
             for (MNode havingCond in node.children("having-econditions"))
-                ef.havingCondition(getConditionFactoryImpl().makeActionConditions(havingCond))
+                ef.havingCondition(getConditionFactoryImpl().makeActionConditions(havingCond, ef.shouldCache()))
         }
 
         return ef
@@ -1995,6 +1984,10 @@ class EntityFacadeImpl implements EntityFacade {
         return newValue
     }
 
+    /* =============== */
+    /* Utility Methods */
+    /* =============== */
+
     protected Map<String, Map<String, String>> javaTypeByGroup = [:]
     String getFieldJavaType(String fieldType, EntityDefinition ed) {
         String groupName = ed.getEntityGroupName()
@@ -2059,6 +2052,26 @@ class EntityFacadeImpl implements EntityFacade {
 
     }
 
+    /** For pretty-print of field values based on field type */
+    String formatFieldString(String entityName, String fieldName, String value) {
+        if (value == null || value.isEmpty()) return ""
+        EntityDefinition ed = getEntityDefinition(entityName)
+        if (ed == null) return value
+        FieldInfo fi = ed.getFieldInfo(fieldName)
+        if (fi == null) return value
+        String outVal = value
+        if (fi.typeValue == 2) {
+            if (value.matches("\\d*")) {
+                // date-time with only digits, ms since epoch value
+                outVal = ecfi.l10n.format(new Timestamp(Long.parseLong(value)), null)
+            }
+        } else if (fi.type.startsWith("currency-")) {
+            outVal = ecfi.l10n.format(new BigDecimal(value), "#,##0.00#")
+        }
+        // logger.warn("formatFieldString ${entityName}:${fieldName} value ${value} outVal ${outVal}")
+        return outVal
+    }
+
     protected static final Map<String, Integer> fieldTypeIntMap = [
             "id":1, "id-long":1, "text-indicator":1, "text-short":1, "text-medium":1, "text-long":1, "text-very-long":1,
             "date-time":2, "time":3, "date":4,
@@ -2089,7 +2102,7 @@ class EntityFacadeImpl implements EntityFacade {
             "java.sql.Clob":13, "Clob":13,
             "java.util.Date":14,
             "java.util.ArrayList":15, "java.util.HashSet":15, "java.util.LinkedHashSet":15, "java.util.LinkedList":15]
-    public static int getJavaTypeInt(String javaType) {
+    static int getJavaTypeInt(String javaType) {
         Integer typeInt = (Integer) javaIntTypeMap.get(javaType)
         if (typeInt == null) throw new EntityException("Java type " + javaType + " not supported for entity fields")
         return typeInt
