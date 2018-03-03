@@ -68,7 +68,7 @@ dependencies {
     compile 'org.codehaus.groovy:groovy-templates:2.4.13' // Apache 2.0
     compile 'org.codehaus.groovy:groovy-xml:2.4.13' // Apache 2.0
     // jansi is needed for groovydoc only, so in providedCompile (not included in war)
-    compileOnly 'org.fusesource.jansi:jansi:1.16'
+    compileOnly 'org.fusesource.jansi:jansi:1.17'
     // Findbugs need only during compile (used by freemarker and various moqui classes)
     compileOnly 'com.google.code.findbugs:annotations:3.0.1'
 
@@ -82,7 +82,7 @@ dependencies {
     // CUPS4J - print through CUPS server
     compile name: 'cups4j', version: '0.6.4' // LGPL <== NOTE!
     // CUPS4J sepends on Apache HTTP Client (unfortunate, adds about 1.1MB)
-    compile 'org.apache.httpcomponents:httpclient:4.5.4'
+    compile 'org.apache.httpcomponents:httpclient:4.5.5'
 
     // ========== Libraries from jcenter ==========
 
@@ -101,6 +101,11 @@ dependencies {
     // cron-utils (NOTE: not updating to 6.0.0 as adds dependency on Guava and threetenbp, evidently for pre Java 8 support but huge libs not worth it)
     compile module('com.cronutils:cron-utils:5.0.5') // Apache 2.0
 
+    // Flexmark (markdown)
+    compile 'com.vladsch.flexmark:flexmark:0.30.0'
+    compile 'com.vladsch.flexmark:flexmark-ext-tables:0.30.0'
+    compile 'com.vladsch.flexmark:flexmark-ext-toc:0.30.0'
+
     // Freemarker
     compile 'org.freemarker:freemarker:2.3.27-incubating' // Apache 2.0
 
@@ -118,7 +123,7 @@ dependencies {
     compile 'com.h2database:h2:1.4.196' // MPL 2.0, EPL 1.0
 
     // Jackson Databind (JSON, etc)
-    compile 'com.fasterxml.jackson.core:jackson-databind:2.9.3'
+    compile 'com.fasterxml.jackson.core:jackson-databind:2.9.4'
 
     // Jetty HTTP Client and Proxy Servlet
     compile 'org.eclipse.jetty:jetty-client:9.4.8.v20171121' // Apache 2.0
@@ -129,9 +134,6 @@ dependencies {
 
     // JSoup (HTML parser, cleaner)
     compile 'org.jsoup:jsoup:1.11.2' // MIT
-
-    // Pegdown (Markdown renderer; depends on parboiled, asm)
-    compile 'org.pegdown:pegdown:1.6.0' // Apache 2.0
 
     // Apache Shiro
     compile module('org.apache.shiro:shiro-core:1.4.0') // Apache 2.0
