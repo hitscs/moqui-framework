@@ -1,12 +1,12 @@
 /*
- * This software is in the public domain under CC0 1.0 Universal plus a 
+ * This software is in the public domain under CC0 1.0 Universal plus a
  * Grant of Patent License.
- * 
+ *
  * To the extent possible under law, the author(s) have dedicated all
  * copyright and related and neighboring rights to this software to the
  * public domain worldwide. This software is distributed without any
  * warranty.
- * 
+ *
  * You should have received a copy of the CC0 Public Domain Dedication
  * along with this software (see the LICENSE.md file). If not, see
  * <http://creativecommons.org/publicdomain/zero/1.0/>.
@@ -19,6 +19,7 @@ import org.moqui.BaseArtifactException
 import org.moqui.BaseException
 import org.moqui.context.ArtifactExecutionInfo
 import org.moqui.context.ExecutionContext
+import org.moqui.context.ResourceFacade
 import org.moqui.impl.context.ContextJavaUtil
 import org.moqui.resource.ResourceReference
 import org.moqui.context.WebFacade
@@ -54,6 +55,7 @@ class ScreenDefinition {
     @SuppressWarnings("GrFinalVariableAccess") final long screenLoadedTime
     protected boolean standalone = false
     protected boolean allowExtraPath = false
+    protected Set<String> renderModes = null
     protected Set<String> serverStatic = null
     Long sourceLastModified = null
 
@@ -95,8 +97,10 @@ class ScreenDefinition {
 
         standalone = "true".equals(screenNode.attribute("standalone"))
         allowExtraPath = "true".equals(screenNode.attribute("allow-extra-path"))
+        String renderModesStr = screenNode.attribute("render-modes") ?: "all"
+        renderModes = new HashSet(Arrays.asList(renderModesStr.split(",")).collect({ it.trim() }))
         String serverStaticStr = screenNode.attribute("server-static")
-        if (serverStaticStr) serverStatic = new HashSet(Arrays.asList(serverStaticStr.split(",")))
+        if (serverStaticStr) serverStatic = new HashSet(Arrays.asList(serverStaticStr.split(",")).collect({ it.trim() }))
 
         // parameter
         for (MNode parameterNode in screenNode.children("parameter")) {
@@ -266,7 +270,7 @@ class ScreenDefinition {
                 }
             }
         } else {
-            logger.warn("Not getting subscreens by file/directory structure for screen [${location}] because it is not a location that supports directories")
+            logger.info("Not getting subscreens by file/directory structure for screen [${location}] because it is not a location that supports directories")
         }
 
         // override dir structure with subscreens.subscreens-item elements
@@ -348,14 +352,14 @@ class ScreenDefinition {
     }
 
     TransitionItem getTransitionItem(String name, String method) {
-        method = method ? method.toLowerCase() : ""
-        TransitionItem ti = (TransitionItem) transitionByName.get(name + "#" + method)
+        method = method != null ? method.toLowerCase() : ""
+        TransitionItem ti = (TransitionItem) transitionByName.get(name.concat("#").concat(method))
         // if no ti, try by name only which will catch transitions with "any" or empty method
         if (ti == null) ti = (TransitionItem) transitionByName.get(name)
         // still none? try each one to see if it matches as a regular expression (first one to match wins)
         if (ti == null) for (TransitionItem curTi in transitionByName.values()) {
-            if (method && curTi.method && (curTi.method == "any" || curTi.method == method)) {
-                if (name == curTi.name) { ti = curTi; break }
+            if (method != null && !method.isEmpty() && ("any".equals(curTi.method) || method.equals(curTi.method))) {
+                if (name.equals(curTi.name)) { ti = curTi; break }
                 if (name.matches(curTi.name)) { ti = curTi; break }
             }
             // logger.info("In getTransitionItem() transition with name [${curTi.name}] method [${curTi.method}] did not match name [${name}] method [${method}]")
@@ -567,7 +571,7 @@ class ScreenDefinition {
             // NOTE: this caches internally so consider getting rid of subContentRefByPath
             contentRef = lastScreenRef.findChildFile(pathName)
         } else {
-            logger.warn("Not looking for sub-content [${pathName}] under screen [${location}] because screen location does not support exists, isFile, etc")
+            logger.info("Not looking for sub-content [${pathName}] under screen [${location}] because screen location does not support exists, isFile, etc")
         }
 
         if (contentRef != null) subContentRefByPath.put(pathName, contentRef)
@@ -1118,8 +1122,10 @@ class ScreenDefinition {
                 int indexComp = ssi1.menuIndex.compareTo(ssi2.menuIndex)
                 if (indexComp != 0) return indexComp
             }
-            // if index is the same or both null, order by title
-            return ssi1.menuTitle.compareTo(ssi2.menuTitle)
+            // if index is the same or both null, order by localized title
+            ResourceFacade rf = ssi1.parentScreen.sfi.ecfi.resourceFacade
+            return rf.expand(ssi1.menuTitle,'',null,true).toUpperCase().compareTo(
+                   rf.expand(ssi2.menuTitle,'',null,true).toUpperCase())
         }
     }
 }

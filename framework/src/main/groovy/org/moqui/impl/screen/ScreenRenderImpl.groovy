@@ -135,12 +135,12 @@ class ScreenRenderImpl implements ScreenRender {
         this.request = request
         this.response = response
         // NOTE: don't get the writer at this point, we don't yet know if we're writing text or binary
-        if (webappName == null || webappName.length() == 0) webappName(request.servletContext.getInitParameter("moqui-name"))
+        if (webappName == null || webappName.length() == 0) webappName = request.servletContext.getInitParameter("moqui-name")
         if (webappName != null && webappName.length() > 0 && (rootScreenLocation == null || rootScreenLocation.length() == 0))
             rootScreenFromHost(request.getServerName())
         if (originalScreenPathNameList == null || originalScreenPathNameList.size() == 0) {
-            String pathInfo = request.getPathInfo()
-            if (pathInfo != null) screenPath(Arrays.asList(pathInfo.split("/")))
+            ArrayList<String> pathList = ec.web.getPathInfoList()
+            screenPath(pathList)
         }
         if (servletContextPath == null || servletContextPath.isEmpty())
             servletContextPath = request.getServletContext()?.getContextPath()
@@ -326,6 +326,7 @@ class ScreenRenderImpl implements ScreenRender {
                         !"true".equals(request.getAttribute("moqui.session.token.created")) &&
                         !"true".equals(request.getAttribute("moqui.request.authenticated"))) {
                     String passedToken = (String) ec.web.getParameters().get("moquiSessionToken")
+                    if (!passedToken) passedToken = request.getHeader("moquiSessionToken") ?: request.getHeader("SessionToken")
                     String curToken = ec.web.getSessionToken()
                     if (curToken != null && curToken.length() > 0) {
                         if (passedToken == null || passedToken.length() == 0) {
@@ -1808,8 +1809,13 @@ class ScreenRenderImpl implements ScreenRender {
                 // not needed: screenStatic:sui.targetScreen.isServerStatic(renderMode)
             }
 
-            menuDataList.add([name:pathItem, title:curScreen.getDefaultMenuName(), subscreens:subscreensList,
-                              path:currentPath.toString(), hasTabMenu:curScreen.hasTabMenu()])
+            String curScreenPath = currentPath.toString()
+            UrlInstance curUrlInstance = buildUrl(curScreenPath)
+            String curPathWithParams = curScreenPath
+            String curParmString = curUrlInstance.getParameterString()
+            if (!curParmString.isEmpty()) curPathWithParams = curPathWithParams + '?' + curParmString
+            menuDataList.add([name:pathItem, title:curScreen.getDefaultMenuName(), subscreens:subscreensList, path:curScreenPath,
+                    pathWithParams:curPathWithParams, hasTabMenu:curScreen.hasTabMenu(), renderModes:curScreen.renderModes])
             // not needed: screenStatic:curScreen.isServerStatic(renderMode)
         }
 
@@ -1829,7 +1835,7 @@ class ScreenRenderImpl implements ScreenRender {
         List<Map<String, Object>> screenDocList = fullUrlInfo.targetScreen.getScreenDocumentInfoList()
 
         Map lastMap = [name:lastPathItem, title:lastTitle, path:lastPath, pathWithParams:currentPath.toString(), image:lastImage,
-                extraPathList:extraPathList, screenDocList:screenDocList]
+                extraPathList:extraPathList, screenDocList:screenDocList, renderModes:fullUrlInfo.targetScreen.renderModes]
         if ("icon".equals(lastImageType)) lastMap.imageType = "icon"
         menuDataList.add(lastMap)
         // not needed: screenStatic:fullUrlInfo.targetScreen.isServerStatic(renderMode)
