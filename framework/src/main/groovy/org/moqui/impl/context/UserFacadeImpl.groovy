@@ -361,6 +361,37 @@ class UserFacadeImpl implements UserFacade {
         return up?.preferenceValue
     }
 
+    @Override Map<String, String> getPreferences(String keyRegexp) {
+        String userId = getUserId()
+        boolean hasKeyFilter = keyRegexp != null && !keyRegexp.isEmpty()
+
+        Map<String, String> prefMap = new HashMap<>()
+        // start with UserGroupPreference, put UserPreference values over top to override
+        EntityList ugpList = eci.getEntity().find("moqui.security.UserGroupPreference")
+                .condition("userGroupId", EntityCondition.IN, getUserGroupIdSet(userId)).disableAuthz().list()
+        int ugpListSize = ugpList.size()
+        for (int i = 0; i < ugpListSize; i++) {
+            EntityValue ugp = (EntityValue) ugpList.get(i)
+            String prefKey = (String) ugp.getNoCheckSimple("preferenceKey")
+            if (hasKeyFilter && !prefKey.matches(keyRegexp)) continue
+            prefMap.put(prefKey, (String) ugp.getNoCheckSimple("preferenceValue"))
+        }
+
+        if (userId != null) {
+            EntityList uprefList = eci.getEntity().find("moqui.security.UserPreference")
+                    .condition("userId", userId).disableAuthz().list()
+            int uprefListSize = uprefList.size()
+            for (int i = 0; i < uprefListSize; i++) {
+                EntityValue upref = (EntityValue) uprefList.get(i)
+                String prefKey = (String) upref.getNoCheckSimple("preferenceKey")
+                if (hasKeyFilter && !prefKey.matches(keyRegexp)) continue
+                prefMap.put(prefKey, (String) upref.getNoCheckSimple("preferenceValue"))
+            }
+        }
+
+        return prefMap
+    }
+
     @Override void setPreference(String preferenceKey, String preferenceValue) {
         String userId = getUserId()
         if (!userId) throw new IllegalStateException("Cannot set preference with key [${preferenceKey}], no user logged in.")
@@ -554,13 +585,14 @@ class UserFacadeImpl implements UserFacade {
     }
 
     /** For internal framework use only, does a login without authc. */
-    boolean internalLoginUser(String username) {
+    boolean internalLoginUser(String username) { return internalLoginUser(username, true) }
+    boolean internalLoginUser(String username, boolean saveHistory) {
         if (username == null || username.isEmpty()) {
             eci.message.addError(eci.l10n.localize("No username specified"))
             return false
         }
 
-        UsernamePasswordToken token = new MoquiShiroRealm.ForceLoginToken(username, true)
+        UsernamePasswordToken token = new MoquiShiroRealm.ForceLoginToken(username, true, saveHistory)
         Subject loginSubject = makeEmptySubject()
         try {
             loginSubject.login(token)
