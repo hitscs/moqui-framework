@@ -242,9 +242,15 @@ along with this software (see the LICENSE.md file). If not, see
                 for (String parentPathName in parentPathList) {
                     if (!parentPathName) continue
                     String curPath = ""
-                    for (int i = 0; i <= listIndex; i++) { if (curPath) { curPath += "/" }; curPath += parentPathList[i] }
+                    String curPathEncoded  = ""
+                    for (int i = 0; i <= listIndex; i++) {
+                        if (curPath) curPath += "/"
+                        curPath += parentPathList[i]
+                        if (curPathEncoded) curPathEncoded += "/"
+                        curPathEncoded += urlEncodeIfNeeded(parentPathList[i])
+                    }
                     breadcrumbNameList.add(parentPathName)
-                    breadcrumbMapList.add([pageName:parentPathName, pagePath:curPath])
+                    breadcrumbMapList.add([pageName:parentPathName, pagePath:curPath, encodedPagePath:curPathEncoded])
                     listIndex++
                 }
             ]]></script>
@@ -442,7 +448,7 @@ along with this software (see the LICENSE.md file). If not, see
             <set field="origPageName" from="pagePath.contains('/') ? pagePath.substring(pagePath.lastIndexOf('/')+1) : pagePath"/>
             <!-- TODO: support change of wikiType too -->
             <if condition="pageName &amp;&amp; (origParentPath != parentPath || origPageName != pageName)">
-                <log message="update#WikiPage path pageName=${pageName} origPageName=${origPageName} parentPath=${parentPath} origParentPath=${origParentPath}"/>
+                <log message="update#WikiPage path ${pagePath} pageName=${pageName} origPageName=${origPageName} parentPath=${parentPath} origParentPath=${origParentPath}"/>
                 <!-- move the page file -->
                 <set field="rootPageDirRef" from="rootPageRef.findMatchingDirectory()"/>
                 <set field="newPageLocation" value="${rootPageDirRef.location}${parentPath ? '/' + parentPath : ''}/${pageName}.${wikiType}"/>
@@ -575,9 +581,10 @@ along with this software (see the LICENSE.md file). If not, see
     </service>
     <service verb="clone" noun="WikiPage">
         <in-parameters>
-            <parameter name="baseWikiSpaceId" required="true"/>
-            <parameter name="wikiSpaceId" required="true"/>
-            <parameter name="pagePath"/>
+            <parameter name="baseWikiSpaceId" required="true"><description>Source/base wiki space</description></parameter>
+            <parameter name="wikiSpaceId" required="true"><description>Destination/target wiki space</description></parameter>
+            <parameter name="pagePath"><description>Source page path</description></parameter>
+            <parameter name="parentPath"><description>Path of parent page in target space (wikiSpaceId), if not specified use the same pagePath as the source</description></parameter>
 
             <parameter name="copyAttachments" type="Boolean" default="true"/>
             <parameter name="publishNew" type="Boolean" default="true"/>
@@ -585,9 +592,10 @@ along with this software (see the LICENSE.md file). If not, see
         <out-parameters>
             <parameter name="basePageInfo" type="Map"/>
             <parameter name="wikiPageId"/>
+            <parameter name="pagePath"/>
         </out-parameters>
         <actions>
-            <log message="Cloning WikiPage ${pagePath} from space ${baseWikiSpaceId} to space ${wikiSpaceId}"/>
+            <log message="Cloning WikiPage ${pagePath} from space ${baseWikiSpaceId} to space ${wikiSpaceId} with parentPath ${parentPath}"/>
 
             <service-call name="org.moqui.impl.WikiServices.get#WikiPageInfo" out-map="basePageInfo"
                     in-map="[wikiSpaceId:baseWikiSpaceId, pagePath:pagePath]"/>
@@ -596,14 +604,34 @@ along with this software (see the LICENSE.md file). If not, see
             <!-- copy page resource text, create new WikiPage record -->
             <!-- NOTE don't do this for root page, content of page handled in clone#WikiSpace -->
             <if condition="pagePath"><then>
+                <!-- determine parentPath, make sure exists in target space -->
+                <if condition="parentPath == wikiSpaceId"><then>
+                    <set field="parentPath" from="null"/>
+                </then><else>
+                    <set field="parentPath" from="parentPath ?: basePageInfo.parentPath"/>
+                    <service-call name="org.moqui.impl.WikiServices.get#WikiPageInfo" out-map="parentPageInfo"
+                            in-map="[wikiSpaceId:wikiSpaceId, pagePath:parentPath]"/>
+                    <if condition="parentPageInfo.pageReference == null || !parentPageInfo.pageReference.exists">
+                        <message>Parent page not found at ${parentPath}, copying under Root Page</message>
+                        <set field="parentPath" from="null"/>
+                    </if>
+                </else></if>
+
+                <!-- make sure page doesn't already exist -->
+                <service-call name="org.moqui.impl.WikiServices.get#WikiPageInfo" out-map="existingPageInfo"
+                        in-map="[wikiSpaceId:wikiSpaceId, pagePath:((parentPath ? parentPath+'/' : '') + (basePageInfo.pageName?:''))]"/>
+                <if condition="existingPageInfo.pageReference?.exists">
+                    <return type="danger" message="Page already exists in space ${wikiSpaceId} at ${parentPath?:''}/${basePageInfo.pageName}"/></if>
+
+
                 <!-- TODO FUTURE this gets the latest text for the page; consider getting published version based on parameter, if there is a published version for this page -->
                 <service-call name="org.moqui.impl.WikiServices.update#WikiPage" out-map="newPageOut"
-                        in-map="[wikiSpaceId:wikiSpaceId, pagePath:basePageInfo.pagePath, pageName:basePageInfo.pageName,
-                            parentPath:basePageInfo.parentPath, wikiType:basePageInfo.wikiType,
+                        in-map="[wikiSpaceId:wikiSpaceId, pageName:basePageInfo.pageName,
+                            parentPath:parentPath, wikiType:basePageInfo.wikiType,
                             pageText:basePageInfo.pageReference.getText()]"/>
 
                 <service-call name="org.moqui.impl.WikiServices.get#WikiPageInfo" out-map="newPageInfo"
-                        in-map="[wikiSpaceId:wikiSpaceId, pagePath:pagePath]"/>
+                        in-map="[wikiSpaceId:wikiSpaceId, pagePath:newPageOut.pagePath]"/>
 
                 <!-- <log level="warn" message="newPageOut: ${newPageOut}"/> -->
             </then><else>
@@ -647,20 +675,32 @@ along with this software (see the LICENSE.md file). If not, see
                     <entity-create value-field="wikiPageUser"/>
                 </iterate>
 
-                <!-- copy WikiPageAlias records -->
+                <!-- copy WikiPageAlias records, only if alias doesn't exist -->
                 <entity-find entity-name="moqui.resource.wiki.WikiPageAlias" list="baseWikiPageAliasList">
                     <econdition field-name="wikiSpaceId" from="baseWikiSpaceId"/>
                     <econdition field-name="wikiPageId" from="basePageInfo.wikiPageId"/>
                 </entity-find>
                 <iterate list="baseWikiPageAliasList" entry="baseWikiPageAlias">
-                    <set field="wikiPageAlias" from="baseWikiPageAlias.cloneValue()"/>
-                    <set field="wikiPageAlias.wikiSpaceId" from="wikiSpaceId"/>
-                    <set field="wikiPageAlias.wikiPageId" from="wikiPageId"/>
-                    <entity-create value-field="wikiPageAlias"/>
+                    <entity-find-one entity-name="moqui.resource.wiki.WikiPageAlias" value-field="existingAlias">
+                        <field-map field-name="wikiSpaceId"/>
+                        <field-map field-name="aliasPath" from="baseWikiPageAlias.aliasPath"/>
+                    </entity-find-one>
+                    <if condition="existingAlias == null"><then>
+                        <set field="wikiPageAlias" from="baseWikiPageAlias.cloneValue()"/>
+                        <set field="wikiPageAlias.wikiSpaceId" from="wikiSpaceId"/>
+                        <set field="wikiPageAlias.wikiPageId" from="wikiPageId"/>
+                        <entity-create value-field="wikiPageAlias"/>
+                    </then><else>
+                        <message type="warning">Not copying wiki page alias ${baseWikiPageAlias.aliasPath}, already exists in space ${wikiSpaceId}</message>
+                    </else></if>
                 </iterate>
             </if>
 
             <!-- TODO FUTURE copy history, optional based on parameter; complex because underlying ResourceReference impl needs to support on its side -->
+
+            <!-- set out parameters -->
+            <set field="pagePath" from="newPageInfo.pagePath"/>
+            <set field="wikiPageId" from="newPageInfo.wikiPageId"/>
         </actions>
     </service>
     <service verb="delete" noun="WikiPage">
