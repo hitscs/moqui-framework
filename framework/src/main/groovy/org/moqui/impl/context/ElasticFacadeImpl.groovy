@@ -32,6 +32,7 @@ import org.moqui.impl.entity.EntityDefinition
 import org.moqui.impl.entity.EntityJavaUtil
 import org.moqui.impl.entity.FieldInfo
 import org.moqui.impl.util.ElasticSearchLogger
+import org.moqui.util.LiteStringMap
 import org.moqui.util.MNode
 import org.moqui.util.RestClient
 import org.moqui.util.RestClient.Method
@@ -43,7 +44,8 @@ import java.util.concurrent.Future
 
 @CompileStatic
 class ElasticFacadeImpl implements ElasticFacade {
-    protected final static Logger logger = LoggerFactory.getLogger(ElasticFacadeImpl.class)
+    private final static Logger logger = LoggerFactory.getLogger(ElasticFacadeImpl.class)
+    private final static Set<String> docSkipKeys = new HashSet<>(Arrays.asList("_index", "_type", "_id", "_timestamp"))
 
     // Max HTTP Response Size for Search - this may need to be configurable, set very high for now (appears that Jetty only grows the buffer as needed for response content)
     public static int MAX_RESPONSE_SIZE_SEARCH = 100 * 1024 * 1024
@@ -58,6 +60,7 @@ class ElasticFacadeImpl implements ElasticFacade {
         // Jackson custom serializers, etc
         SimpleModule module = new SimpleModule()
         module.addSerializer(GString.class, new ContextJavaUtil.GStringJsonSerializer())
+        module.addSerializer(LiteStringMap.class, new ContextJavaUtil.LiteStringMapJsonSerializer())
         // NOTE: using custom serializer for Timestamps because ElasticSearch 7+ does NOT allow negative longs for epoch_millis format... sigh
         //     .enable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
         module.addSerializer(Timestamp.class, new ContextJavaUtil.TimestampNoNegativeJsonSerializer())
@@ -241,15 +244,21 @@ class ElasticFacadeImpl implements ElasticFacade {
 
         @Override
         void createIndex(String index, Map docMapping, String alias) {
-            createIndex(index, null, docMapping, alias)
+            createIndex(index, null, docMapping, alias, null)
         }
         void createIndex(String index, String docType, Map docMapping, String alias) {
+            createIndex(index, docType, docMapping, alias, null)
+        }
+        void createIndex(String index, String docType, Map docMapping, String alias, Map settings) {
             RestClient restClient = makeRestClient(Method.PUT, index, null)
             if (docMapping || alias) {
                 Map requestMap = new HashMap()
                 if (docMapping) {
                     if (esVersionUnder7) requestMap.put("mappings", [(docType?:'_doc'):docMapping])
                     else requestMap.put("mappings", docMapping)
+                }
+                if (settings) {
+                    requestMap.put('settings', settings)
                 }
                 if (alias) requestMap.put("aliases", [(alias):[:]])
                 restClient.text(objectToJson(requestMap))
@@ -420,11 +429,12 @@ class ElasticFacadeImpl implements ElasticFacade {
             RestClient.RestResponse response = makeRestClient(Method.GET, path, explain ? [explain:'true'] : null)
                     .text(queryJson).call()
             checkResponse(response, "Validate Query", index)
-            Map responseMap = (Map) jsonToObject(response.text())
+            String responseText = response.text()
+            Map responseMap = (Map) jsonToObject(responseText)
             // System.out.println("Validate Query Response: ${response.statusCode} ${response.reasonPhrase} Value? ${responseMap.get("valid") as boolean}\n${response.text()}")
             // return null if valid
             if (responseMap.get("valid")) return null
-            logger.warn("Invalid ElasticSearch query\n${queryJson}\nExplanations: ${responseMap.explanations}")
+            logger.warn("Invalid ElasticSearch query\n${JsonOutput.prettyPrint(queryJson)}\nResponse: ${JsonOutput.prettyPrint(responseText)}")
             return responseMap
         }
 
@@ -473,17 +483,26 @@ class ElasticFacadeImpl implements ElasticFacade {
         }
         synchronized protected void storeIndexAndMapping(String indexName, EntityValue dd) {
             String dataDocumentId = (String) dd.getNoCheckSimple("dataDocumentId")
+            String manualMappingServiceName = (String) dd.getNoCheckSimple("manualMappingServiceName")
             String esIndexName = ddIdToEsIndex(dataDocumentId)
 
             // logger.warn("========== Checking index ${esIndexName} with alias ${indexName} , hasIndex=${hasIndex}")
             boolean hasIndex = indexExists(esIndexName)
             Map docMapping = makeElasticSearchMapping(dataDocumentId, ecfi)
+            Map settings = null
+
+            if (manualMappingServiceName) {
+                def serviceResult = ecfi.service.sync().name(manualMappingServiceName).parameter('mapping', docMapping).call()
+                docMapping = (Map) serviceResult.mapping
+                settings = (Map) serviceResult.settings
+            }
+
             if (hasIndex) {
                 logger.info("Updating ElasticSearch index ${esIndexName} for ${dataDocumentId} document mapping")
                 putMapping(esIndexName, dataDocumentId, docMapping)
             } else {
                 logger.info("Creating ElasticSearch index ${esIndexName} for ${dataDocumentId} with alias ${indexName} and adding document mapping")
-                createIndex(esIndexName, dataDocumentId, docMapping, indexName)
+                createIndex(esIndexName, dataDocumentId, docMapping, indexName, settings)
                 // logger.warn("========== Added mapping for ${dataDocumentId} to index ${esIndexName}:\n${docMapping}")
             }
         }
@@ -522,8 +541,8 @@ class ElasticFacadeImpl implements ElasticFacade {
                 // String _timestamp = document._timestamp
                 // As of ES 2.0 _index, _type, _id, and _timestamp shouldn't be in document to be indexed
                 // clone document before removing fields so they are present for other code using the same data
-                document = new LinkedHashMap(document)
-                document.remove('_index'); document.remove('_type'); document.remove('_id'); document.remove('_timestamp')
+                document = new LiteStringMap(document, docSkipKeys)
+                // no longer needed with docSkipKeys: document.remove('_index'); document.remove('_type'); document.remove('_id'); document.remove('_timestamp')
 
                 // as of ES 6.0, and required for 7 series, one index per doc type so one per dataDocumentId, cleaned up to be valid ES index name (all lower case, etc)
                 esIndexName = ddIdToEsIndex(_type)
@@ -667,7 +686,7 @@ class ElasticFacadeImpl implements ElasticFacade {
     static final Map<String, String> esTypeMap = [id:'keyword', 'id-long':'keyword', date:'date', time:'text',
             'date-time':'date', 'number-integer':'long', 'number-decimal':'double', 'number-float':'double',
             'currency-amount':'double', 'currency-precise':'double', 'text-indicator':'keyword', 'text-short':'text',
-            'text-medium':'text', 'text-long':'text', 'text-very-long':'text', 'binary-very-long':'binary']
+            'text-medium':'text', 'text-intermediate':'text', 'text-long':'text', 'text-very-long':'text', 'binary-very-long':'binary']
 
     static Map makeElasticSearchMapping(String dataDocumentId, ExecutionContextFactoryImpl ecfi) {
         EntityValue dataDocument = ecfi.entityFacade.find("moqui.entity.document.DataDocument")

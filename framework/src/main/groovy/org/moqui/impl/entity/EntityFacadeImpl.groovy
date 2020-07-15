@@ -32,6 +32,7 @@ import org.moqui.impl.context.ExecutionContextFactoryImpl
 import org.moqui.impl.context.TransactionFacadeImpl
 import org.moqui.impl.entity.EntityJavaUtil.RelationshipInfo
 import org.moqui.util.CollectionUtilities
+import org.moqui.util.LiteStringMap
 import org.moqui.util.MNode
 import org.moqui.util.ObjectUtilities
 import org.moqui.util.StringUtilities
@@ -1561,7 +1562,7 @@ class EntityFacadeImpl implements EntityFacade {
 
             if (rs.next()) {
                 newEntityValue = new EntityValueImpl(ed, this)
-                HashMap<String, Object> valueMap = newEntityValue.getValueMap()
+                LiteStringMap valueMap = newEntityValue.getValueMap()
                 int size = fieldInfoArray.length;
                 for (int i = 0; i < size; i++) {
                     FieldInfo fi = fieldInfoArray[i];
@@ -2184,7 +2185,7 @@ class EntityFacadeImpl implements EntityFacade {
     }
 
     protected static final Map<String, Integer> fieldTypeIntMap = [
-            "id":1, "id-long":1, "text-indicator":1, "text-short":1, "text-medium":1, "text-long":1, "text-very-long":1,
+            "id":1, "id-long":1, "text-indicator":1, "text-short":1, "text-medium":1, "text-intermediate":1, "text-long":1, "text-very-long":1,
             "date-time":2, "time":3, "date":4,
             "number-integer":6, "number-float":8,
             "number-decimal":9, "currency-amount":9, "currency-precise":9,
@@ -2192,7 +2193,7 @@ class EntityFacadeImpl implements EntityFacade {
     protected static final Map<String, String> fieldTypeJavaMap = [
             "id":"java.lang.String", "id-long":"java.lang.String",
             "text-indicator":"java.lang.String", "text-short":"java.lang.String", "text-medium":"java.lang.String",
-            "text-long":"java.lang.String", "text-very-long":"java.lang.String",
+            "text-intermediate":"java.lang.String", "text-long":"java.lang.String", "text-very-long":"java.lang.String",
             "date-time":"java.sql.Timestamp", "time":"java.sql.Time", "date":"java.sql.Date",
             "number-integer":"java.lang.Long", "number-float":"java.lang.Double",
             "number-decimal":"java.math.BigDecimal", "currency-amount":"java.math.BigDecimal", "currency-precise":"java.math.BigDecimal",
