@@ -23,6 +23,7 @@ import org.moqui.entity.EntityFind;
 import org.moqui.entity.EntityList;
 import org.moqui.entity.EntityValue;
 import org.moqui.impl.context.*;
+import org.moqui.impl.context.ContextJavaUtil.EntityRecordLock;
 import org.moqui.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +65,6 @@ public abstract class EntityValueBase implements EntityValue {
 
     protected transient LiteStringMap<Object> dbValueMap = null;
     protected transient LiteStringMap<Object> oldDbValueMap = null;
-    protected transient LiteStringMap<Object> internalPkMap = null;
     private transient Map<String, Map<String, String>> localizedByLocaleByField = null;
 
     private transient boolean modified = false;
@@ -73,9 +73,7 @@ public abstract class EntityValueBase implements EntityValue {
     private static final String indentString = "    ";
 
     /** Default constructor for deserialization ONLY. */
-    public EntityValueBase() {
-        valueMapInternal = new LiteStringMap<>().useManualIndex();
-    }
+    public EntityValueBase() { valueMapInternal = new LiteStringMap<>().useManualIndex(); }
 
     public EntityValueBase(EntityDefinition ed, EntityFacadeImpl efip) {
         efiTransient = efip;
@@ -94,8 +92,15 @@ public abstract class EntityValueBase implements EntityValue {
     @SuppressWarnings("unchecked")
     @Override public void readExternal(ObjectInput objectInput) throws IOException, ClassNotFoundException {
         entityName = objectInput.readUTF();
-        LiteStringMap<Object> lsm = (LiteStringMap<Object>) objectInput.readObject();
+        LiteStringMap<Object> lsm;
+        try {
+            lsm = (LiteStringMap<Object>) objectInput.readObject();
+        } catch (Throwable t) {
+            logger.error("Error deserializing fields Map for entity " + entityName, t);
+            throw t;
+        }
         FieldInfo[] fieldInfos = getEntityDefinition().entityInfo.allFieldInfoArray;
+        valueMapInternal.ensureCapacity(fieldInfos.length);
         for (int i = 0; i < fieldInfos.length; i++) {
             FieldInfo fieldInfo = fieldInfos[i];
             int oldIndex = lsm.findIndexIString(fieldInfo.name);
@@ -389,9 +394,39 @@ public abstract class EntityValueBase implements EntityValue {
 
     @Override public boolean containsPrimaryKey() { return this.getEntityDefinition().containsPrimaryKey(valueMapInternal); }
     @Override public Map<String, Object> getPrimaryKeys() {
+        /* don't use cached internalPkMap, would have to make sure to capture all set, put, setFields, setFieldsEv, etc to invalidate otherwise may be stale
+         * is just as fast to recreate by index gets on valueMapInternal vs cloning the cached LiteStringMap
+        protected transient LiteStringMap<Object> internalPkMap = null;
         if (internalPkMap != null) return new LiteStringMap<Object>(internalPkMap);
         internalPkMap = getEntityDefinition().getPrimaryKeys(this.valueMapInternal);
         return new LiteStringMap<Object>(internalPkMap);
+         */
+
+        FieldInfo[] pkFieldInfos = getEntityDefinition().entityInfo.pkFieldInfoArray;
+        LiteStringMap<Object> pks = new LiteStringMap<>(pkFieldInfos.length);
+
+        for (int i = 0; i < pkFieldInfos.length; i++) {
+            FieldInfo fi = pkFieldInfos[i];
+            pks.putByIString(fi.name, this.valueMapInternal.getByIString(fi.name, fi.index));
+        }
+
+        return pks;
+    }
+    @Override public String getPrimaryKeysString() {
+        FieldInfo[] pkFieldInfoArray = getEntityDefinition().entityInfo.pkFieldInfoArray;
+        if (pkFieldInfoArray.length == 1) {
+            FieldInfo fi = pkFieldInfoArray[0];
+            return ObjectUtilities.toPlainString(this.valueMapInternal.getByIString(fi.name, fi.index));
+        } else {
+            StringBuilder pkCombinedSb = new StringBuilder();
+            for (int pki = 0; pki < pkFieldInfoArray.length; pki++) {
+                FieldInfo fi = pkFieldInfoArray[pki];
+                // NOTE: separator of '::' matches separator used for combined PK String in EntityDefinition.getPrimaryKeysString() and EntityDataDocument.makeDocId()
+                if (pkCombinedSb.length() > 0) pkCombinedSb.append("::");
+                pkCombinedSb.append(ObjectUtilities.toPlainString(this.valueMapInternal.getByIString(fi.name, fi.index)));
+            }
+            return pkCombinedSb.toString();
+        }
     }
 
     public boolean primaryKeyMatches(EntityValueBase evb) {
@@ -1322,6 +1357,57 @@ public abstract class EntityValueBase implements EntityValue {
         return errorMessage;
     }
 
+    private void registerMutateLock() {
+        final EntityFacadeImpl efi = getEntityFacadeImpl();
+        final TransactionFacadeImpl tfi = efi.ecfi.transactionFacade;
+        if (!tfi.getUseLockTrack()) return;
+
+        final EntityDefinition ed = getEntityDefinition();
+        final ArtifactExecutionFacadeImpl aefi = efi.ecfi.getEci().artifactExecutionFacade;
+
+        ArrayList<ArtifactExecutionInfo> stackArray = aefi.getStackArray();
+
+        // add EntityRecordLock for this record
+        tfi.registerRecordLock(new EntityRecordLock(ed.getFullEntityName(), this.getPrimaryKeysString(), stackArray));
+
+        // add EntityRecordLock for each type one (with FK) relationship where FK fields not null
+        ArrayList<EntityJavaUtil.RelationshipInfo> relInfoList = ed.getRelationshipsInfo(false);
+        int relInfoListSize = relInfoList.size();
+        for (int ri = 0; ri < relInfoListSize; ri++) {
+            EntityJavaUtil.RelationshipInfo relInfo = relInfoList.get(ri);
+            if (!relInfo.isFk) continue;
+
+            String pkString = null;
+            int keyFieldSize = relInfo.keyFieldList.size();
+            if (keyFieldSize == 1) {
+                String keyFieldName = relInfo.keyFieldList.get(0);
+                FieldInfo fieldInfo = ed.getFieldInfo(keyFieldName);
+                Object keyValue = this.getKnownField(fieldInfo);
+                if (keyValue != null) pkString = ObjectUtilities.toPlainString(keyValue);
+            } else {
+                boolean hasAllValues = true;
+                Map<String, Object> relFieldValues = new HashMap<>();
+                for (int ki = 0; ki < keyFieldSize; ki++) {
+                    String keyFieldName = relInfo.keyFieldList.get(ki);
+                    FieldInfo fieldInfo = ed.getFieldInfo(keyFieldName);
+                    Object keyValue = this.getKnownField(fieldInfo);
+                    if (keyValue == null) {
+                        hasAllValues = false;
+                        break;
+                    } else {
+                        // use relInfo.keyMap to get the field name of the PK field on the related entity
+                        relFieldValues.put(relInfo.keyMap.get(keyFieldName), keyValue);
+                    }
+                }
+                if (hasAllValues) pkString = relInfo.relatedEd.getPrimaryKeysString(relFieldValues);
+            }
+
+            if (pkString != null) {
+                tfi.registerRecordLock(new EntityRecordLock(relInfo.relatedEd.getFullEntityName(), pkString, stackArray));
+            }
+        }
+    }
+
     @Override
     public EntityValue create() {
         final EntityDefinition ed = getEntityDefinition();
@@ -1354,7 +1440,11 @@ public abstract class EntityValueBase implements EntityValue {
 
             // if there is not a txCache or the txCache doesn't handle the create, call the abstract method to create the main record
             TransactionCache curTxCache = getTxCache(ecfi);
-            if (curTxCache == null || !curTxCache.create(this)) this.basicCreate(null);
+            if (curTxCache == null || !curTxCache.create(this)) {
+                // NOTE: calls basicCreate() instead of createExtended() directly so don't register lock here
+
+                this.basicCreate(null);
+            }
 
             // NOTE: cache clear is the same for create, update, delete; even on create need to clear one cache because it
             // might have a null value for a previous query attempt
@@ -1388,6 +1478,10 @@ public abstract class EntityValueBase implements EntityValue {
                 fieldArrayIndex++;
             }
         }
+
+        // if enabled register locks before operation
+        registerMutateLock();
+
         createExtended(fieldArray, con);
     }
 
@@ -1500,6 +1594,10 @@ public abstract class EntityValueBase implements EntityValue {
             // if there is not a txCache or the txCache doesn't handle the update, call the abstract method to update the main record
             if (curTxCache == null || !curTxCache.update(this)) {
                 // no TX cache update, etc: ready to do actual update
+
+                // if enabled register locks before operation
+                registerMutateLock();
+
                 updateExtended(pkFieldArray, nonPkFieldArray, null);
                 // if ("OrderHeader".equals(ed.getEntityName()) && "55500".equals(valueMapInternal.get("orderId"))) logger.warn("Called updateExtended order " + this.valueMapInternal.toString());
             }
@@ -1544,6 +1642,9 @@ public abstract class EntityValueBase implements EntityValue {
             }
         }
 
+        // if enabled register locks before operation
+        registerMutateLock();
+
         updateExtended(pkFieldArray, nonPkFieldArray, con);
     }
 
@@ -1572,14 +1673,18 @@ public abstract class EntityValueBase implements EntityValue {
         try {
             // run EECA before rules
             efi.runEecaRules(entityName, this, "delete", true);
-            // this needs to be called before the actual update so we know which fields are modified
-            // NOTE: consider not doing this on delete, DataDocuments are not great for representing absence of records
-            // NOTE2: this might be useful, but is a bit of a pain and utility is dubious, leave out for now
-            // efi.getEntityDataFeed().dataFeedCheckAndRegister(this, true, valueMap, null)
+
+            // check DataDocuments to update (if not primary entity) or delete (if primary entity)
+            efi.getEntityDataFeed().dataFeedCheckDelete(this);
 
             // if there is not a txCache or the txCache doesn't handle the delete, call the abstract method to delete the main record
             TransactionCache curTxCache = getTxCache(ecfi);
-            if (curTxCache == null || !curTxCache.delete(this)) this.deleteExtended(null);
+            if (curTxCache == null || !curTxCache.delete(this)) {
+                // if enabled register locks before operation
+                registerMutateLock();
+
+                this.deleteExtended(null);
+            }
 
             // clear the entity cache
             efi.getEntityCache().clearCacheForValue(this, false);

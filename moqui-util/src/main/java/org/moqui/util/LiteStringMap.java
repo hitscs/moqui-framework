@@ -75,6 +75,14 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
         valueArray = Arrays.copyOf(valueArray, newLength);
     }
 
+
+    public LiteStringMap<V> ensureCapacity(int capacity) {
+        if (keyArray.length < capacity) {
+            keyArray = Arrays.copyOf(keyArray, capacity);
+            valueArray = Arrays.copyOf(valueArray, capacity);
+        }
+        return this;
+    }
     public LiteStringMap<V> useManualIndex() { useManualIndex = true; return this; }
 
     public int findIndex(String keyOrig) {
@@ -159,6 +167,7 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
     }
     /** For this method the String key must be non-null and interned (returned value from String.intern()) */
     public V getByIString(String key, int index) {
+        if (index >= keyArray.length) throw new ArrayIndexOutOfBoundsException("Index " + index + " invalid, internal array length " + keyArray.length + "; for key: " + key);
         String idxKey = keyArray[index];
         if (idxKey == null) return null;
         if (idxKey != key) throw new IllegalArgumentException("Index " + index + " has key " + keyArray[index] + ", cannot get with key " + key);
@@ -194,7 +203,7 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
     public V putByIString(String key, V value, int index) {
         // if ("pseudoId".equals(key)) { System.out.println("========= put index " + index + " key " + key + ": " + value); new Exception("location").printStackTrace(); }
         useManualIndex = true;
-        if (index >= keyArray.length) growArrays(index);
+        if (index >= keyArray.length) growArrays(index + 1);
         if (index > lastIndex) lastIndex = index;
         if (keyArray[index] == null) {
             keyArray[index] = key;
@@ -215,18 +224,19 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
     public V remove(Object key) {
         if (key == null) return null;
         int keyIndex = findIndexIString(internString(key.toString()));
+        return removeByIndex(keyIndex);
+    }
+
+    private V removeByIndex(int keyIndex) {
         if (keyIndex == -1) {
             return null;
         } else {
+            V oldValue = valueArray[keyIndex];
             if (useManualIndex) {
                 // with manual indexes don't shift entries, will cause manually specified indexes to be wrong
-                V oldValue = valueArray[keyIndex];
                 keyArray[keyIndex] = null;
                 valueArray[keyIndex] = null;
-                mapHash = 0;
-                return oldValue;
             } else {
-                V oldValue = valueArray[keyIndex];
                 // shift all later values up one position
                 for (int i = keyIndex; i < lastIndex; i++) {
                     keyArray[i] = keyArray[i+1];
@@ -237,12 +247,51 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
                 valueArray[lastIndex] = null;
                 // decrement last index
                 lastIndex--;
-                // reset hash
-                mapHash = 0;
-                // done
-                return oldValue;
+            }
+            // reset hash
+            mapHash = 0;
+            return oldValue;
+        }
+    }
+
+    public boolean removeAllKeys(Collection<?> collection) {
+        if (collection == null) return false;
+        boolean removedAny = false;
+        for (Object obj : collection) {
+            // keys in LiteStringMap cannot be null
+            if (obj == null) continue;
+            int idx = findIndex(obj.toString());
+            if (idx != -1) {
+                removeByIndex(idx);
+                removedAny = true;
             }
         }
+        return removedAny;
+    }
+    public boolean removeValue(Object value) {
+        boolean removedAny = false;
+        for (int i = 0; i < valueArray.length; i++) {
+            Object curVal = valueArray[i];
+            if (value == null) {
+                if (curVal == null) {
+                    removeByIndex(i);
+                    removedAny = true;
+                }
+            } else if (value.equals(curVal)) {
+                removeByIndex(i);
+                removedAny = true;
+            }
+        }
+        return removedAny;
+    }
+    public boolean removeAllValues(Collection<?> collection) {
+        if (collection == null) return false;
+        boolean removedAny = false;
+        // NOTE: could iterate over valueArray outer and collection inner but value array has no Iterator overhead so do that inner (and nice to reuse removeValue())
+        for (Object obj : collection) {
+            if (removeValue(obj)) removedAny = true;
+        }
+        return removedAny;
     }
 
     @Override public void putAll(Map<? extends String, ? extends V> map) { putAll(map, null); }
@@ -470,10 +519,22 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
         }
 
         @Override public boolean add(String s) { throw new UnsupportedOperationException("Key Set add not allowed"); }
-        @Override public boolean remove(Object o) { throw new UnsupportedOperationException("Key Set remove not allowed"); }
+        @Override public boolean remove(Object o) {
+            if (o == null) return false;
+            int idx = lsm.findIndex(o.toString());
+            if (idx == -1) {
+                return false;
+            } else {
+                lsm.removeByIndex(idx);
+                return true;
+            }
+        }
         @Override public boolean addAll(Collection<? extends String> collection) { throw new UnsupportedOperationException("Key Set add all not allowed"); }
         @Override public boolean retainAll(Collection<?> collection) { throw new UnsupportedOperationException("Key Set retain all not allowed"); }
-        @Override public boolean removeAll(Collection<?> collection) { throw new UnsupportedOperationException("Key Set remove all not allowed"); }
+        @Override @SuppressWarnings("unchecked")
+        public boolean removeAll(Collection<?> collection) {
+            return lsm.removeAllKeys(collection);
+        }
         @Override public void clear() { throw new UnsupportedOperationException("Key Set clear not allowed"); }
     }
 
@@ -502,10 +563,14 @@ public class LiteStringMap<V> implements Map<String, V>, Externalizable, Compara
         }
 
         @Override public boolean add(Object s) { throw new UnsupportedOperationException("Value Collection add not allowed"); }
-        @Override public boolean remove(Object o) { throw new UnsupportedOperationException("Value Collection remove not allowed"); }
+        @Override public boolean remove(Object o) {
+            return lsm.removeValue(o);
+        }
         @Override public boolean addAll(Collection<? extends V> collection) { throw new UnsupportedOperationException("Value Collection add all not allowed"); }
         @Override public boolean retainAll(Collection<?> collection) { throw new UnsupportedOperationException("Value Collection retain all not allowed"); }
-        @Override public boolean removeAll(Collection<?> collection) { throw new UnsupportedOperationException("Value Collection remove all not allowed"); }
+        @Override public boolean removeAll(Collection<?> collection) {
+            return lsm.removeAllValues(collection);
+        }
         @Override public void clear() { throw new UnsupportedOperationException("Value Collection clear not allowed"); }
     }
 

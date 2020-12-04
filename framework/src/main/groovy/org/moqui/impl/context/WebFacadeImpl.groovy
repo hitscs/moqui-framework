@@ -26,6 +26,7 @@ import org.moqui.entity.EntityNotFoundException
 import org.moqui.entity.EntityValue
 import org.moqui.entity.EntityValueNotFoundException
 import org.moqui.impl.util.SimpleSigner
+import org.moqui.util.MNode
 import org.moqui.util.WebUtilities
 import org.moqui.impl.context.ExecutionContextFactoryImpl.WebappInfo
 import org.moqui.impl.screen.ScreenDefinition
@@ -85,6 +86,9 @@ class WebFacadeImpl implements WebFacade {
         this.webappMoquiName = webappMoquiName
         this.request = request
         this.response = response
+
+        MNode webappNode = eci.ecfi.getWebappNode(webappMoquiName)
+        boolean uploadExecutableAllow = "true".equals(webappNode.attribute("upload-executable-allow"))
 
         // NOTE: the Visit is not setup here but rather in the MoquiSessionListener (for init and destroy)
         // don't set 'ec' in request attributes, not serializable: request.setAttribute("ec", eci)
@@ -159,6 +163,13 @@ class WebFacadeImpl implements WebFacade {
                 if (item.isFormField()) {
                     addValueToMultipartParameterMap(item.getFieldName(), item.getString("UTF-8"))
                 } else {
+                    if (!uploadExecutableAllow) {
+                        if (WebUtilities.isExecutable(item)) {
+                            logger.warn("Found executable upload file ${item.getName()}")
+                            throw new WebMediaTypeException("Executable file ${item.getName()} upload not allowed")
+                        }
+                    }
+
                     // put the FileItem itself in the Map to be used by the application code
                     addValueToMultipartParameterMap(item.getFieldName(), item)
                     fileUploadList.add(item)
@@ -752,7 +763,7 @@ class WebFacadeImpl implements WebFacade {
     }
 
     @Override void sendResourceResponse(String location) { sendResourceResponseInternal(location, false, eci, response) }
-    void sendResourceResponse(String location, boolean inline) { sendResourceResponseInternal(location, inline, eci, response) }
+    @Override void sendResourceResponse(String location, boolean inline) { sendResourceResponseInternal(location, inline, eci, response) }
     static void sendResourceResponseInternal(String location, boolean inline, ExecutionContextImpl eci, HttpServletResponse response) {
         ResourceReference rr = eci.resource.getLocationReference(location)
         if (rr == null || (rr.supportsExists() && !rr.getExists())) {
@@ -951,7 +962,7 @@ class WebFacadeImpl implements WebFacade {
     void handleServiceRestCall(List<String> extraPathNameList) {
         ContextStack parmStack = (ContextStack) getParameters()
 
-        logger.info("Service REST for ${request.getMethod()} to ${request.getPathInfo()} headers ${request.headerNames.collect()} parameters ${getRequestParameters()}")
+        logger.info("Service REST for ${request.getMethod()} to ${request.getPathInfo()} headers ${request.headerNames.collect()} parameters ${getRequestParameters().keySet()}")
 
         // check for login, etc error messages
         if (eci.message.hasError()) {
@@ -1169,6 +1180,8 @@ class WebFacadeImpl implements WebFacade {
     void saveScreenLastInfo(String screenPath, Map parameters) {
         session.setAttribute("moqui.screen.last.path", screenPath ?: getPathInfo())
         parameters = parameters ?: new HashMap(getRequestParameters())
+        // logger.warn("saveScreenLastInfo parameters: ${parameters}")
+        // logger.warn("saveScreenLastInfo getRequestParameters(): ${getRequestParameters().toString()}")
         WebUtilities.testSerialization("moqui.screen.last.parameters", parameters)
         session.setAttribute("moqui.screen.last.parameters", parameters)
     }
@@ -1220,7 +1233,7 @@ class WebFacadeImpl implements WebFacade {
         Map currentSavedParameters = (Map) request.session.getAttribute("moqui.saved.parameters")
         if (currentSavedParameters) parms.putAll(currentSavedParameters)
         if (requestParameters) parms.putAll(requestParameters)
-        if (requestAttributes) parms.putAll(requestAttributes)
+        // don't include attributes, end up with internal stuff in URL parameters: if (requestAttributes) parms.putAll(requestAttributes)
         if (!"production".equals(System.getProperty("instance_purpose")))
             WebUtilities.testSerialization("moqui.saved.parameters", parms)
         session.setAttribute("moqui.saved.parameters", parms)
@@ -1230,7 +1243,7 @@ class WebFacadeImpl implements WebFacade {
     void saveErrorParametersToSession() {
         Map parms = new HashMap()
         if (requestParameters) parms.putAll(requestParameters)
-        if (requestAttributes) parms.putAll(requestAttributes)
+        // don't include attributes, end up with internal stuff in URL parameters: if (requestAttributes) parms.putAll(requestAttributes)
         if (!"production".equals(System.getProperty("instance_purpose")))
             WebUtilities.testSerialization("moqui.error.parameters", parms)
         session.setAttribute("moqui.error.parameters", parms)
